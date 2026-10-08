@@ -2,6 +2,7 @@ import os
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, status
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from app.config import settings
@@ -193,6 +194,32 @@ def decide_approval(
         student_code=student.student_code,
         image_path=approval.face_profile.image_path,
     )
+
+
+@router.get("/{face_profile_id}/image")
+def get_face_image(
+    face_profile_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """รูปใบหน้าที่อัปโหลดไว้ (เจ้าของ หรืออาจารย์เท่านั้น)"""
+    profile = db.query(FaceProfile).filter(FaceProfile.id == face_profile_id).first()
+    if profile is None or not profile.image_path:
+        raise HTTPException(status_code=404, detail="ไม่พบรูปใบหน้านี้")
+
+    is_owner = (
+        current_user.student_profile is not None
+        and current_user.student_profile.id == profile.student_id
+    )
+    if not (is_owner or current_user.teacher_profile is not None):
+        raise HTTPException(status_code=403, detail="คุณไม่มีสิทธิ์ดูรูปนี้")
+
+    # กันไม่ให้อ่านไฟล์นอกโฟลเดอร์ uploads
+    uploads_root = os.path.realpath(settings.uploads_dir)
+    path = os.path.realpath(profile.image_path)
+    if os.path.commonpath([uploads_root, path]) != uploads_root or not os.path.isfile(path):
+        raise HTTPException(status_code=404, detail="ไม่พบไฟล์รูปใบหน้า")
+    return FileResponse(path)
 
 
 @router.delete("/{face_profile_id}", status_code=status.HTTP_204_NO_CONTENT)

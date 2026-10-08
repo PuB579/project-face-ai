@@ -1,5 +1,6 @@
-import React, { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Link } from "react-router-dom";
+import { api, getUser } from "../../lib/api";
 import {
   Home,
   ScanFace,
@@ -21,7 +22,6 @@ import {
   Bell,
   ChevronDown,
   Info,
-  MapPin,
   Users,
   ArrowRight,
   Code2,
@@ -40,44 +40,65 @@ const navItems = [
   { icon: Settings, label: "ตั้งค่า", to: "/settings" },
 ];
 
-const historyItems = [
-  {
-    time: "08:05:32",
-    date: "20 พ.ค. 2567",
-    code: "CS-201",
-    name: "โครงสร้างข้อมูล",
-    status: "success",
-    badge: "เข้าเรียน",
-  },
-  {
-    time: "10:20:15",
-    date: "20 พ.ค. 2567",
-    code: "CS-202",
-    name: "การเขียนโปรแกรมเชิงวัตถุ",
-    status: "late",
-    badge: "รอเช็คชื่อ",
-  },
-  {
-    time: "13:30:00",
-    date: "20 พ.ค. 2567",
-    code: "CS-203",
-    name: "ฐานข้อมูล",
-    status: "absent",
-    badge: "ยังไม่ถึงเวลา",
-  },
-];
+const hhmm = (t) => (t ? t.slice(0, 5) : "--:--");
+const dateHHMM = (iso) => (iso ? iso.slice(11, 16) : "--:--");
+
+// สถานะของคาบเรียนวันนี้ (จาก /attendance/my-sessions) สำหรับแสดงในรายการ
+function sessionBadge(s, now) {
+  if (s.my_status === "present") return { status: "success", badge: "เข้าเรียน" };
+  if (s.my_status === "late") return { status: "late", badge: "มาสาย" };
+  if (s.my_status === "absent") return { status: "absent", badge: "ขาดเรียน" };
+  if (s.open_at && now < new Date(s.open_at)) return { status: "absent", badge: "ยังไม่ถึงเวลา" };
+  if (s.close_at && now > new Date(s.close_at)) return { status: "absent", badge: "หมดเวลา" };
+  return { status: "late", badge: "รอเช็คชื่อ" };
+}
 
 export default function CheckIn() {
+  const user = getUser();
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [currentTime, setCurrentTime] = useState(new Date());
   const [cameraError, setCameraError] = useState(null);
   const videoRef = useRef(null);
   const streamRef = useRef(null);
-  const [scanPhase, setScanPhase] = useState(0);
+
+  const [sessions, setSessions] = useState([]);
+  const [sessionsLoading, setSessionsLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
+  const [selectedId, setSelectedId] = useState(null);
+  // idle | scanning | success | error
+  const [phase, setPhase] = useState("idle");
+  const [resultMessage, setResultMessage] = useState("");
 
   useEffect(() => {
     const timer = setInterval(() => setCurrentTime(new Date()), 1000);
     return () => clearInterval(timer);
+  }, []);
+
+  const loadSessions = async () => {
+    try {
+      setSessions(await api("/attendance/my-sessions"));
+      setLoadError("");
+    } catch (err) {
+      setLoadError(err.message);
+    }
+  };
+
+  // โหลดคาบเรียนวันนี้ แล้วเลือกคาบที่เปิดอยู่และยังไม่ได้เช็คชื่อเป็นค่าเริ่มต้น
+  useEffect(() => {
+    let cancelled = false;
+    api("/attendance/my-sessions")
+      .then((data) => {
+        if (cancelled) return;
+        setSessions(data);
+        const best =
+          data.find((s) => s.is_open && !s.my_status) || data.find((s) => s.is_open) || data[0];
+        setSelectedId(best ? best.session_id : null);
+      })
+      .catch((err) => !cancelled && setLoadError(err.message))
+      .finally(() => !cancelled && setSessionsLoading(false));
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // เปิดกล้องจริงของเครื่อง
@@ -111,28 +132,18 @@ export default function CheckIn() {
     };
   }, []);
 
-  // จำลองขั้นตอนการสแกน/ยืนยันตัวตน (จะแทนที่ด้วยผลจริงจากโมเดล face-recognition ภายหลัง)
-  useEffect(() => {
-    const phases = [
-      { delay: 3000, phase: 1 },
-      { delay: 5000, phase: 2 },
-      { delay: 8000, phase: 0 },
-    ];
-    const timeouts = phases.map((p) => setTimeout(() => setScanPhase(p.phase), p.delay));
-    const loop = setInterval(() => {
-      setScanPhase(0);
-      phases.forEach((p) => setTimeout(() => setScanPhase(p.phase), p.delay));
-    }, 10000);
-    return () => {
-      timeouts.forEach(clearTimeout);
-      clearInterval(loop);
-    };
-  }, []);
+  const selected = sessions.find((s) => s.session_id === selectedId) || null;
+  const closeAt = selected?.close_at ? new Date(selected.close_at) : null;
+  const isOpenNow =
+    !!selected &&
+    (!selected.open_at || currentTime >= new Date(selected.open_at)) &&
+    (!closeAt || currentTime <= closeAt);
+  const alreadyChecked = !!selected?.my_status;
+  const canScan = isOpenNow && !alreadyChecked && !cameraError && phase !== "scanning";
 
   const getRemainingMinutes = () => {
-    const end = new Date(currentTime);
-    end.setHours(9, 0, 0, 0);
-    const diff = end - currentTime;
+    if (!closeAt) return "-";
+    const diff = closeAt - currentTime;
     if (diff <= 0) return "0:00";
     return `${Math.floor(diff / 60000)}:${String(Math.floor((diff % 60000) / 1000)).padStart(
       2,
@@ -140,16 +151,78 @@ export default function CheckIn() {
     )}`;
   };
 
+  // ถ่ายภาพจากวิดีโอ (ภาพจริง ไม่กลับด้านแบบที่แสดงบนจอ) เพื่อส่งให้ backend ตรวจใบหน้า
+  const captureFrame = () =>
+    new Promise((resolve, reject) => {
+      const video = videoRef.current;
+      if (!video || !video.videoWidth) {
+        reject(new Error("กล้องยังไม่พร้อม กรุณารอสักครู่"));
+        return;
+      }
+      const canvas = document.createElement("canvas");
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      canvas.getContext("2d").drawImage(video, 0, 0);
+      canvas.toBlob(
+        (blob) => (blob ? resolve(blob) : reject(new Error("ถ่ายภาพไม่สำเร็จ"))),
+        "image/jpeg",
+        0.92
+      );
+    });
+
+  const handleScan = async () => {
+    if (!selected) return;
+    setPhase("scanning");
+    setResultMessage("");
+    try {
+      const blob = await captureFrame();
+      const form = new FormData();
+      form.append("file", blob, "checkin.jpg");
+      const res = await api(`/attendance/checkin?session_id=${selected.session_id}`, {
+        method: "POST",
+        body: form,
+      });
+      setPhase("success");
+      setResultMessage(
+        `${res.status === "late" ? "บันทึกว่ามาสาย" : "บันทึกการเข้าเรียนแล้ว"} (ความมั่นใจ ${Number(
+          res.confidence
+        ).toFixed(1)}%)`
+      );
+      loadSessions();
+    } catch (err) {
+      setPhase("error");
+      setResultMessage(err.message);
+    }
+  };
+
   const getToastContent = () => {
-    if (scanPhase === 1)
-      return { icon: "✓", scanning: false, title: "ตรวจจับใบหน้าแล้ว", subtitle: "กำลังยืนยันตัวตน..." };
-    if (scanPhase === 2)
-      return { icon: "✓", scanning: false, title: "ยืนยันตัวตนสำเร็จ", subtitle: "บันทึกการเข้าเรียนแล้ว" };
-    return { icon: "⟳", scanning: true, title: "กำลังสแกนใบหน้า...", subtitle: "กรุณามองที่กล้อง" };
+    if (phase === "scanning")
+      return { icon: "⟳", scanning: true, tone: "blue", title: "กำลังยืนยันตัวตน...", subtitle: "กรุณาอยู่นิ่งๆ" };
+    if (phase === "success")
+      return { icon: "✓", scanning: false, tone: "green", title: "เช็คชื่อสำเร็จ", subtitle: resultMessage };
+    if (phase === "error")
+      return { icon: "!", scanning: false, tone: "red", title: "เช็คชื่อไม่สำเร็จ", subtitle: resultMessage };
+    if (alreadyChecked)
+      return {
+        icon: "✓",
+        scanning: false,
+        tone: "green",
+        title: "เช็คชื่อคาบนี้แล้ว",
+        subtitle: `เวลา ${hhmm(selected.my_check_in_time)}`,
+      };
+    return { icon: "◎", scanning: false, tone: "blue", title: "พร้อมสแกนใบหน้า", subtitle: "มองที่กล้องแล้วกดปุ่มสแกน" };
   };
 
   const toast = getToastContent();
-  const borderColor = scanPhase >= 1 ? "#22c55e" : "#3b82f6";
+  const borderColor =
+    phase === "success" || alreadyChecked ? "#22c55e" : phase === "error" ? "#ef4444" : "#3b82f6";
+  const toastBg = { blue: "bg-blue-600", green: "bg-emerald-600", red: "bg-red-600" }[toast.tone];
+  const historyItems = sessions.map((s) => ({
+    time: s.my_check_in_time ? s.my_check_in_time.slice(0, 8) : hhmm(s.start_time),
+    code: s.course_code,
+    name: s.course_name,
+    ...sessionBadge(s, currentTime),
+  }));
 
   const statusIcon = (s) => {
     if (s === "success") return <CheckCircle2 className="w-4 h-4" />;
@@ -262,20 +335,15 @@ export default function CheckIn() {
 
           <button className="relative w-10 h-10 flex items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100 transition-colors shrink-0">
             <Bell className="w-5 h-5" />
-            <span className="absolute top-1.5 right-1.5 w-4 h-4 rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center">
-              3
-            </span>
           </button>
 
           <button className="flex items-center gap-2.5 pl-2 shrink-0">
-            <img
-              src="https://images.unsplash.com/photo-1633332755192-727a05c4013d?w=100&h=100&fit=crop&crop=faces"
-              alt="นายกฤษฎา ใจดี"
-              className="w-10 h-10 rounded-full object-cover"
-            />
+            <div className="w-10 h-10 rounded-full bg-blue-600 text-white flex items-center justify-center text-sm font-bold">
+              {(user?.full_name || "?").charAt(0)}
+            </div>
             <div className="text-left hidden sm:block">
               <div className="text-sm font-semibold text-slate-800 whitespace-nowrap">
-                นายกฤษฎา ใจดี
+                {user?.full_name || "-"}
               </div>
               <div className="text-xs text-slate-400 whitespace-nowrap">นักศึกษา</div>
             </div>
@@ -304,30 +372,70 @@ export default function CheckIn() {
                       <Camera className="w-6 h-6" />
                     </div>
                     <div className="min-w-0 shrink-0">
-                      <div className="text-base font-bold text-slate-900">พร้อมเช็คชื่อ</div>
-                      <div className="text-xs text-slate-500 leading-snug">
-                        กรุณาจัดตำแหน่งใบหน้าให้อยู่ในกรอบ
+                      <div className="text-base font-bold text-slate-900">
+                        {sessionsLoading
+                          ? "กำลังโหลดคาบเรียน..."
+                          : !selected
+                          ? "วันนี้ไม่มีคาบเรียน"
+                          : alreadyChecked
+                          ? "เช็คชื่อคาบนี้แล้ว"
+                          : isOpenNow
+                          ? "พร้อมเช็คชื่อ"
+                          : "ยังเช็คชื่อไม่ได้"}
                       </div>
+                      <div className="text-xs text-slate-500 leading-snug">
+                        {loadError ||
+                          (selected
+                            ? "กรุณาจัดตำแหน่งใบหน้าให้อยู่ในกรอบ"
+                            : "เมื่ออาจารย์เปิดคาบเรียน รายวิชาจะแสดงที่นี่")}
+                      </div>
+                      {sessions.length > 1 && (
+                        <select
+                          value={selectedId ?? ""}
+                          onChange={(e) => {
+                            setSelectedId(Number(e.target.value));
+                            setPhase("idle");
+                          }}
+                          className="mt-2 rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-slate-700"
+                        >
+                          {sessions.map((s) => (
+                            <option key={s.session_id} value={s.session_id}>
+                              {s.course_code} {s.course_name} ({hhmm(s.start_time)})
+                            </option>
+                          ))}
+                        </select>
+                      )}
                     </div>
 
-                    <div className="ml-auto shrink-0">
-                      <div className="flex items-center gap-3">
-                        <div className="text-[10px] text-slate-500">เวลาเปิดเช็คชื่อ</div>
-                        <div className="text-xl font-bold text-slate-900">08:30</div>
-                        <div className="text-sm text-slate-400">-</div>
-                        <div className="text-xl font-bold text-slate-900">09:00</div>
-                        <div className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2.5 py-1 text-[11px] font-semibold text-emerald-600">
-                          <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
-                          เปิดเช็คชื่ออยู่
+                    {selected && (
+                      <div className="ml-auto shrink-0">
+                        <div className="flex items-center gap-3">
+                          <div className="text-[10px] text-slate-500">เวลาเปิดเช็คชื่อ</div>
+                          <div className="text-xl font-bold text-slate-900">{dateHHMM(selected.open_at)}</div>
+                          <div className="text-sm text-slate-400">-</div>
+                          <div className="text-xl font-bold text-slate-900">{dateHHMM(selected.close_at)}</div>
+                          {isOpenNow ? (
+                            <div className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2.5 py-1 text-[11px] font-semibold text-emerald-600">
+                              <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+                              เปิดเช็คชื่ออยู่
+                            </div>
+                          ) : (
+                            <div className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-semibold text-slate-500">
+                              <span className="h-1.5 w-1.5 rounded-full bg-slate-400" />
+                              ปิดเช็คชื่อ
+                            </div>
+                          )}
                         </div>
+                        {isOpenNow && (
+                          <div className="flex items-center gap-2 mt-1">
+                            <div className="text-[10px] text-slate-500">เหลือเวลา</div>
+                            <div className="text-sm font-bold text-blue-600">
+                              {getRemainingMinutes()} นาที
+                            </div>
+                          </div>
+                        )}
                       </div>
-                      <div className="flex items-center gap-2 mt-1">
-                        <div className="text-[10px] text-slate-500">เหลือเวลา</div>
-                        <div className="text-sm font-bold text-blue-600">
-                          {getRemainingMinutes()} นาที
-                        </div>
-                      </div>
-                    </div>
+                    )}
                   </div>
                 </div>
 
@@ -410,7 +518,7 @@ export default function CheckIn() {
                     <div className="absolute bottom-5 left-1/2 -translate-x-1/2 z-10 flex items-center gap-3 bg-black/65 backdrop-blur-xl px-5 py-3 rounded-full">
                       <div
                         className={`w-9 h-9 rounded-full flex items-center justify-center text-white text-sm shrink-0 ${
-                          toast.scanning ? "bg-blue-600 animate-spin" : "bg-emerald-600"
+                          `${toastBg} ${toast.scanning ? "animate-spin" : ""}`
                         }`}
                         style={toast.scanning ? { animationDuration: "2s" } : undefined}
                       >
@@ -436,10 +544,21 @@ export default function CheckIn() {
                   </span>
                 </div>
 
-                {/* Cancel */}
+                {/* Scan */}
                 <div className="px-6 py-4 border-t border-slate-100">
-                  <button className="w-full py-3 rounded-xl bg-white border border-blue-200 text-sm font-semibold text-blue-500 hover:bg-blue-50 hover:border-blue-300 transition-colors">
-                    ยกเลิกการเช็คชื่อ
+                  <button
+                    onClick={handleScan}
+                    disabled={!canScan}
+                    className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-blue-600 text-sm font-semibold text-white hover:bg-blue-700 disabled:bg-slate-200 disabled:text-slate-400 transition-colors"
+                  >
+                    <ScanFace className="w-5 h-5" />
+                    {phase === "scanning"
+                      ? "กำลังตรวจสอบใบหน้า..."
+                      : alreadyChecked
+                      ? "เช็คชื่อคาบนี้แล้ว"
+                      : phase === "error"
+                      ? "สแกนใหม่อีกครั้ง"
+                      : "สแกนใบหน้าเพื่อเช็คชื่อ"}
                   </button>
                 </div>
               </div>
@@ -451,59 +570,56 @@ export default function CheckIn() {
               <div className="rounded-2xl bg-white border border-slate-200 shadow-sm p-6">
                 <div className="flex items-center justify-between mb-4">
                   <div className="text-sm font-semibold text-slate-900">ข้อมูลรายวิชา</div>
-                  <div className="text-xs text-blue-600 font-medium cursor-pointer hover:underline">
-                    ดูรายละเอียด
-                  </div>
                 </div>
 
-                <div className="flex items-center gap-3 pb-4 border-b border-slate-100 mb-4">
-                  <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-blue-500 to-blue-700 flex items-center justify-center text-white shadow-lg shadow-blue-500/25 shrink-0">
-                    <Code2 className="w-6 h-6" />
-                  </div>
-                  <div>
-                    <div className="text-lg font-extrabold text-slate-900">CS-201</div>
-                    <div className="text-xs text-slate-500">โครงสร้างข้อมูล (Data Structures)</div>
-                  </div>
-                </div>
+                {selected ? (
+                  <>
+                    <div className="flex items-center gap-3 pb-4 border-b border-slate-100 mb-4">
+                      <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-blue-500 to-blue-700 flex items-center justify-center text-white shadow-lg shadow-blue-500/25 shrink-0">
+                        <Code2 className="w-6 h-6" />
+                      </div>
+                      <div>
+                        <div className="text-lg font-extrabold text-slate-900">{selected.course_code}</div>
+                        <div className="text-xs text-slate-500">{selected.course_name}</div>
+                      </div>
+                    </div>
 
-                <div className="space-y-3 text-sm text-slate-600">
-                  <div className="flex items-center gap-3">
-                    <div className="h-9 w-9 rounded-2xl bg-slate-100 flex items-center justify-center text-slate-500 shrink-0">
-                      <User className="w-4 h-4" />
+                    <div className="space-y-3 text-sm text-slate-600">
+                      <div className="flex items-center gap-3">
+                        <div className="h-9 w-9 rounded-2xl bg-slate-100 flex items-center justify-center text-slate-500 shrink-0">
+                          <User className="w-4 h-4" />
+                        </div>
+                        <div>
+                          <div className="text-slate-900 font-semibold">{selected.teacher_name || "-"}</div>
+                          <div className="text-xs text-slate-500">อาจารย์ผู้สอน</div>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <div className="h-9 w-9 rounded-2xl bg-slate-100 flex items-center justify-center text-slate-500 shrink-0">
+                          <Users className="w-4 h-4" />
+                        </div>
+                        <div>
+                          <div className="text-slate-900 font-semibold">{selected.class_code || "-"}</div>
+                          <div className="text-xs text-slate-500">กลุ่มเรียน</div>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <div className="h-9 w-9 rounded-2xl bg-slate-100 flex items-center justify-center text-slate-500 shrink-0">
+                          <Clock className="w-4 h-4" />
+                        </div>
+                        <div>
+                          <div className="text-slate-900 font-semibold">
+                            {hhmm(selected.start_time)}
+                            {selected.end_time ? ` - ${hhmm(selected.end_time)}` : ""}
+                          </div>
+                          <div className="text-xs text-slate-500">เวลาเรียนวันนี้</div>
+                        </div>
+                      </div>
                     </div>
-                    <div>
-                      <div className="text-slate-900 font-semibold">อาจารย์ณัฐวุฒิ อาจารย์</div>
-                      <div className="text-xs text-slate-500">อาจารย์ผู้สอน</div>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <div className="h-9 w-9 rounded-2xl bg-slate-100 flex items-center justify-center text-slate-500 shrink-0">
-                      <MapPin className="w-4 h-4" />
-                    </div>
-                    <div>
-                      <div className="text-slate-900 font-semibold">CS-201</div>
-                      <div className="text-xs text-slate-500">ห้องเรียน</div>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <div className="h-9 w-9 rounded-2xl bg-slate-100 flex items-center justify-center text-slate-500 shrink-0">
-                      <Clock className="w-4 h-4" />
-                    </div>
-                    <div>
-                      <div className="text-slate-900 font-semibold">จันทร์ 10:30 - 12:00</div>
-                      <div className="text-xs text-slate-500">เวลาเรียน</div>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <div className="h-9 w-9 rounded-2xl bg-slate-100 flex items-center justify-center text-slate-500 shrink-0">
-                      <Users className="w-4 h-4" />
-                    </div>
-                    <div>
-                      <div className="text-slate-900 font-semibold">32 คน</div>
-                      <div className="text-xs text-slate-500">จำนวนนักศึกษา</div>
-                    </div>
-                  </div>
-                </div>
+                  </>
+                ) : (
+                  <div className="text-sm text-slate-400">ยังไม่มีคาบเรียนที่เปิดในวันนี้</div>
+                )}
               </div>
 
               {/* Steps */}
@@ -528,12 +644,12 @@ export default function CheckIn() {
               {/* Today's history */}
               <div className="rounded-2xl bg-white border border-slate-200 shadow-sm p-6">
                 <div className="flex items-center justify-between mb-4">
-                  <div className="text-sm font-semibold text-slate-900">ประวัติการเช็คชื่อวันนี้</div>
-                  <div className="text-xs text-blue-600 font-medium cursor-pointer hover:underline">
-                    ดูทั้งหมด
-                  </div>
+                  <div className="text-sm font-semibold text-slate-900">คาบเรียนวันนี้</div>
                 </div>
                 <div className="space-y-3">
+                  {historyItems.length === 0 && (
+                    <div className="text-xs text-slate-400">ยังไม่มีคาบเรียนวันนี้</div>
+                  )}
                   {historyItems.map((item, i) => (
                     <div
                       key={i}
@@ -550,7 +666,7 @@ export default function CheckIn() {
                         <div className="min-w-0">
                           <div className="text-sm font-bold text-slate-900">{item.time}</div>
                           <div className="text-xs text-slate-400 truncate">
-                            {item.date} • {item.code} {item.name}
+                            {item.code} {item.name}
                           </div>
                         </div>
                       </div>

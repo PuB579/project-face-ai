@@ -1,54 +1,67 @@
 import { useState } from "react";
 import {
   User,
-  Camera,
   Mail,
   Phone,
-  MapPin,
+  Building2,
   CalendarDays,
   GraduationCap,
   Lock,
   Eye,
   EyeOff,
-  Smartphone,
   Save,
   Pencil,
   X,
-  Trophy,
+  CalendarCheck,
   UsersRound,
   BookMarked,
   CheckCircle2,
   Users,
 } from "lucide-react";
 import TeacherLayout from "./TeacherLayout";
+import LoadState from "../LoadState";
 import { useAppearanceSettings } from "./useAppearanceSettings";
-
-const teachingCourses = [
-  { code: "CS-201", name: "โครงสร้างข้อมูล (Data Structures)", term: "1/2567", students: 32, color: "bg-blue-100 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400" },
-  { code: "CS-202", name: "การเขียนโปรแกรมเชิงวัตถุ (OOP)", term: "1/2567", students: 30, color: "bg-purple-100 dark:bg-purple-950/40 text-purple-600 dark:text-purple-400" },
-  { code: "CS-203", name: "ฐานข้อมูล (Database Systems)", term: "1/2567", students: 28, color: "bg-orange-100 dark:bg-orange-950/40 text-orange-500 dark:text-orange-400" },
-  { code: "CS-204", name: "ปัญญาประดิษฐ์เบื้องต้น (AI Intro)", term: "1/2567", students: 24, color: "bg-teal-100 dark:bg-teal-950/40 text-teal-600 dark:text-teal-400" },
-  { code: "CS-205", name: "ระบบปฏิบัติการ (Operating Systems)", term: "1/2567", students: 14, color: "bg-rose-100 dark:bg-rose-950/40 text-rose-500 dark:text-rose-400" },
-];
-
+import { colorOf, useTeacherData } from "./useTeacherData";
+import { api, updateStoredUser } from "../../lib/api";
+import { useApi } from "../../lib/useApi";
+import { initial, termLabel, thaiDate } from "../../lib/format";
 export default function TeacherProfile() {
   const { t } = useAppearanceSettings();
   const [activeTab, setActiveTab] = useState("info");
   const [editing, setEditing] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
-  const [saved, setSaved] = useState(false);
+  const [saved, setSaved] = useState("");
+  const meReq = useApi("/teachers/me");
+  const me = meReq.data;
+  const { classes, records } = useTeacherData();
+  const [draft, setDraft] = useState(null); // ข้อมูลที่กำลังแก้ (null = ไม่ได้แก้)
+  const [saving, setSaving] = useState(false);
+  const [formError, setFormError] = useState("");
+  const [pw, setPw] = useState({ current: "", next: "", confirm: "" });
 
-  const [form, setForm] = useState({
-    firstName: "ณัฐวุฒิ",
-    lastName: "ประเสริฐกุล",
-    title: "อาจารย์ประจำภาควิชาวิทยาการคอมพิวเตอร์",
-    department: "คณะวิทยาศาสตร์และเทคโนโลยี",
-    email: "nattawut.p@university.ac.th",
-    phone: "081-234-5678",
-    office: "อาคาร 5 ห้อง 512",
-    bio: "สอนวิชาด้านโครงสร้างข้อมูล ปัญญาประดิษฐ์ และวิศวกรรมซอฟต์แวร์ สนใจงานวิจัยด้าน Computer Vision และระบบจดจำใบหน้า",
-  });
+  const form = draft || {
+    firstName: me?.first_name || "",
+    lastName: me?.last_name || "",
+    title: me?.position || "",
+    department: me?.department_name || "-",
+    email: me?.email || "",
+    phone: me?.phone || "",
+  };
+  const fullName = `${form.firstName} ${form.lastName}`.trim();
+  const teachingCourses = classes.map((c, i) => ({
+    id: c.id,
+    code: c.course_code || "-",
+    name: c.course_name,
+    term: termLabel(c),
+    students: c.student_count,
+    color: colorOf(i).icon,
+  }));
+  const sessionCount = new Set(records.map((r) => r.session_id)).size;
 
+  const flash = (message) => {
+    setSaved(message);
+    setTimeout(() => setSaved(""), 2500);
+  };
   const tabs = [
     { id: "info", label: t("profile.tabs.info") },
     { id: "security", label: t("profile.tabs.security") },
@@ -56,52 +69,92 @@ export default function TeacherProfile() {
   ];
 
   const stats = [
-    { icon: BookMarked, label: t("profile.stats.coursesTeaching"), value: "5", color: "text-blue-600 dark:text-blue-400", bg: "bg-blue-100 dark:bg-blue-950/40" },
-    { icon: UsersRound, label: t("profile.stats.totalStudents"), value: "142", color: "text-emerald-600 dark:text-emerald-400", bg: "bg-emerald-100 dark:bg-emerald-950/40" },
-    { icon: Trophy, label: t("profile.stats.yearsTeaching"), value: "8", color: "text-amber-500 dark:text-amber-400", bg: "bg-amber-100 dark:bg-amber-950/40" },
+    { icon: BookMarked, label: t("profile.stats.coursesTeaching"), value: classes.length, color: "text-blue-600 dark:text-blue-400", bg: "bg-blue-100 dark:bg-blue-950/40" },
+    { icon: UsersRound, label: t("profile.stats.totalStudents"), value: classes.reduce((s, c) => s + c.student_count, 0), color: "text-emerald-600 dark:text-emerald-400", bg: "bg-emerald-100 dark:bg-emerald-950/40" },
+    { icon: CalendarCheck, label: t("live.sessionsHeld"), value: sessionCount, color: "text-amber-500 dark:text-amber-400", bg: "bg-amber-100 dark:bg-amber-950/40" },
   ];
 
   function updateField(key, value) {
-    setForm((prev) => ({ ...prev, [key]: value }));
+    setDraft((prev) => ({ ...(prev || form), [key]: value }));
   }
 
-  function handleSave() {
+  function startEdit() {
+    setDraft(form);
+    setFormError("");
+    setEditing(true);
+  }
+
+  function cancelEdit() {
+    setDraft(null);
     setEditing(false);
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2500);
+  }
+
+  async function handleSave() {
+    setSaving(true);
+    setFormError("");
+    try {
+      const updated = await api("/teachers/me", {
+        method: "PUT",
+        body: {
+          first_name: form.firstName.trim(),
+          last_name: form.lastName.trim(),
+          position: form.title.trim() || null,
+          phone: form.phone.trim() || null,
+        },
+      });
+      updateStoredUser({ full_name: updated.full_name });
+      meReq.reload();
+      setDraft(null);
+      setEditing(false);
+      flash(t("profile.savedMessage"));
+    } catch (err) {
+      setFormError(err.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleChangePassword() {
+    setFormError("");
+    if (pw.next.length < 6) return setFormError(t("live.passwordTooShort"));
+    if (pw.next !== pw.confirm) return setFormError(t("live.passwordMismatch"));
+    setSaving(true);
+    try {
+      await api("/auth/change-password", {
+        method: "POST",
+        body: { current_password: pw.current, new_password: pw.next },
+      });
+      setPw({ current: "", next: "", confirm: "" });
+      flash(t("live.passwordChanged"));
+    } catch (err) {
+      setFormError(err.message);
+    } finally {
+      setSaving(false);
+    }
   }
 
   return (
     <TeacherLayout titleIcon={User} titleKey="nav.profile" subtitleKey="profile.subtitle">
+      <LoadState loading={meReq.loading} error={meReq.error || formError} onRetry={meReq.reload} />
       <div className="grid grid-cols-1 xl:grid-cols-[320px_1fr] gap-6 items-start">
         {/* ---------- Left: profile card ---------- */}
         <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-100 dark:border-slate-800 shadow-sm p-6 text-center xl:sticky xl:top-6">
-          <div className="relative w-28 h-28 mx-auto">
-            <img
-              src="https://images.unsplash.com/photo-1519085360753-af0119f7cbe7?w=200&h=200&fit=crop&crop=faces"
-              alt="รูปโปรไฟล์"
-              className="w-28 h-28 rounded-full object-cover ring-4 ring-blue-50 dark:ring-blue-950/40"
-            />
-            <button
-              className="absolute bottom-0 right-0 w-9 h-9 rounded-full bg-blue-600 hover:bg-blue-700 transition-colors flex items-center justify-center ring-4 ring-white dark:ring-slate-900"
-              aria-label="เปลี่ยนรูปโปรไฟล์"
-            >
-              <Camera className="w-4 h-4 text-white" />
-            </button>
+          <div className="w-28 h-28 mx-auto rounded-full bg-blue-600 text-white text-4xl font-bold flex items-center justify-center ring-4 ring-blue-50 dark:ring-blue-950/40">
+            {initial(fullName)}
           </div>
 
           <div className="mt-4">
             <div className="text-lg font-bold text-slate-900 dark:text-slate-100">
-              {t("role.teacher")}{form.firstName} {form.lastName}
+              {fullName || "-"}
             </div>
-            <div className="text-sm text-slate-400 dark:text-slate-500 mt-0.5">{form.title}</div>
+            <div className="text-sm text-slate-400 dark:text-slate-500 mt-0.5">{form.title || t("role.teacher")}</div>
           </div>
 
           <div className="mt-5 space-y-2.5 text-left">
             <InfoLine icon={Mail} value={form.email} />
-            <InfoLine icon={Phone} value={form.phone} />
-            <InfoLine icon={MapPin} value={form.office} />
-            <InfoLine icon={CalendarDays} value={t("profile.joinedSince")} />
+            <InfoLine icon={Phone} value={form.phone || "-"} />
+            <InfoLine icon={Building2} value={form.department} />
+            <InfoLine icon={CalendarDays} value={`${t("live.joinedPrefix")} ${thaiDate(me?.created_at)}`} />
           </div>
 
           <div className="grid grid-cols-3 gap-2 mt-6 pt-5 border-t border-slate-100 dark:border-slate-800">
@@ -139,7 +192,7 @@ export default function TeacherProfile() {
           {saved && (
             <div className="flex items-center gap-2 bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-100 dark:border-emerald-900 text-emerald-600 dark:text-emerald-400 text-sm font-medium rounded-xl px-4 py-3">
               <CheckCircle2 className="w-4 h-4" />
-              {t("profile.savedMessage")}
+              {saved}
             </div>
           )}
 
@@ -150,7 +203,7 @@ export default function TeacherProfile() {
                 <h3 className="font-bold text-slate-900 dark:text-slate-100">{t("profile.infoTitle")}</h3>
                 {!editing ? (
                   <button
-                    onClick={() => setEditing(true)}
+                    onClick={startEdit}
                     className="flex items-center gap-1.5 text-sm font-semibold text-blue-600 dark:text-blue-400 hover:underline"
                   >
                     <Pencil className="w-3.5 h-3.5" />
@@ -158,7 +211,7 @@ export default function TeacherProfile() {
                   </button>
                 ) : (
                   <button
-                    onClick={() => setEditing(false)}
+                    onClick={cancelEdit}
                     className="flex items-center gap-1.5 text-sm font-medium text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-300"
                   >
                     <X className="w-3.5 h-3.5" />
@@ -171,23 +224,9 @@ export default function TeacherProfile() {
                 <Field label={t("profile.fields.firstName")} value={form.firstName} editing={editing} onChange={(v) => updateField("firstName", v)} />
                 <Field label={t("profile.fields.lastName")} value={form.lastName} editing={editing} onChange={(v) => updateField("lastName", v)} />
                 <Field label={t("profile.fields.title")} value={form.title} editing={editing} onChange={(v) => updateField("title", v)} full />
-                <Field label={t("profile.fields.department")} value={form.department} editing={editing} onChange={(v) => updateField("department", v)} full />
-                <Field label={t("profile.fields.email")} value={form.email} editing={editing} onChange={(v) => updateField("email", v)} icon={Mail} />
+                <Field label={t("profile.fields.department")} value={form.department} editing={false} full icon={Building2} />
+                <Field label={t("profile.fields.email")} value={form.email} editing={false} icon={Mail} />
                 <Field label={t("profile.fields.phone")} value={form.phone} editing={editing} onChange={(v) => updateField("phone", v)} icon={Phone} />
-                <Field label={t("profile.fields.office")} value={form.office} editing={editing} onChange={(v) => updateField("office", v)} icon={MapPin} full />
-                <div className="sm:col-span-2">
-                  <label className="text-xs font-semibold text-slate-500 dark:text-slate-400 mb-1.5 block">{t("profile.fields.bio")}</label>
-                  {editing ? (
-                    <textarea
-                      value={form.bio}
-                      onChange={(e) => updateField("bio", e.target.value)}
-                      rows={3}
-                      className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-sm text-slate-700 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-200 dark:focus:ring-blue-900 resize-none"
-                    />
-                  ) : (
-                    <p className="text-sm text-slate-600 dark:text-slate-300 leading-relaxed">{form.bio}</p>
-                  )}
-                </div>
               </div>
 
               {editing && (
@@ -196,7 +235,7 @@ export default function TeacherProfile() {
                   className="mt-6 flex items-center gap-2 bg-blue-600 hover:bg-blue-700 transition-colors text-white text-sm font-semibold px-5 py-2.5 rounded-xl shadow-sm shadow-blue-100 dark:shadow-blue-950"
                 >
                   <Save className="w-4 h-4" />
-                  {t("profile.saveChanges")}
+                  {saving ? t("live.saving") : t("profile.saveChanges")}
                 </button>
               )}
             </div>
@@ -216,6 +255,8 @@ export default function TeacherProfile() {
                     <div className="relative">
                       <input
                         type={showPassword ? "text" : "password"}
+                        value={pw.current}
+                        onChange={(e) => setPw((p) => ({ ...p, current: e.target.value }))}
                         placeholder="••••••••"
                         className="w-full px-3.5 py-2.5 pr-10 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-sm text-slate-700 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-200 dark:focus:ring-blue-900"
                       />
@@ -232,6 +273,8 @@ export default function TeacherProfile() {
                     <label className="text-xs font-semibold text-slate-500 dark:text-slate-400 mb-1.5 block">{t("profile.fields2.newPassword")}</label>
                     <input
                       type="password"
+                      value={pw.next}
+                      onChange={(e) => setPw((p) => ({ ...p, next: e.target.value }))}
                       placeholder="••••••••"
                       className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-sm text-slate-700 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-200 dark:focus:ring-blue-900"
                     />
@@ -240,34 +283,23 @@ export default function TeacherProfile() {
                     <label className="text-xs font-semibold text-slate-500 dark:text-slate-400 mb-1.5 block">{t("profile.fields2.confirmPassword")}</label>
                     <input
                       type="password"
+                      value={pw.confirm}
+                      onChange={(e) => setPw((p) => ({ ...p, confirm: e.target.value }))}
                       placeholder="••••••••"
                       className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-sm text-slate-700 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-200 dark:focus:ring-blue-900"
                     />
                   </div>
                 </div>
                 <button
-                  onClick={handleSave}
-                  className="mt-6 flex items-center gap-2 bg-blue-600 hover:bg-blue-700 transition-colors text-white text-sm font-semibold px-5 py-2.5 rounded-xl shadow-sm shadow-blue-100 dark:shadow-blue-950"
+                  onClick={handleChangePassword}
+                  disabled={saving || !pw.current || !pw.next}
+                  className="mt-6 flex items-center gap-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-60 transition-colors text-white text-sm font-semibold px-5 py-2.5 rounded-xl shadow-sm shadow-blue-100 dark:shadow-blue-950"
                 >
                   <Save className="w-4 h-4" />
                   {t("profile.updatePassword")}
                 </button>
               </div>
 
-              <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-100 dark:border-slate-800 shadow-sm p-6">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-start gap-3">
-                    <div className="w-11 h-11 rounded-xl bg-blue-100 dark:bg-blue-950/40 flex items-center justify-center shrink-0">
-                      <Smartphone className="w-5 h-5 text-blue-600 dark:text-blue-400" />
-                    </div>
-                    <div>
-                      <div className="text-sm font-bold text-slate-900 dark:text-slate-100">{t("profile.twoFactorTitle")}</div>
-                      <div className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">{t("profile.twoFactorDesc")}</div>
-                    </div>
-                  </div>
-                  <ToggleSwitch defaultChecked={false} />
-                </div>
-              </div>
             </div>
           )}
 
@@ -279,13 +311,16 @@ export default function TeacherProfile() {
                 <h3 className="font-bold text-slate-900 dark:text-slate-100">{t("profile.coursesTabTitle")}</h3>
               </div>
               <div className="space-y-3">
+                {teachingCourses.length === 0 && (
+                  <div className="text-sm text-slate-400 dark:text-slate-500">{t("live.noCourses")}</div>
+                )}
                 {teachingCourses.map((c) => (
                   <div
-                    key={c.code}
+                    key={c.id}
                     className="flex items-center gap-4 p-4 rounded-xl border border-slate-100 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/60 transition-colors"
                   >
                     <span className={`w-11 h-11 rounded-xl flex items-center justify-center font-bold text-xs shrink-0 ${c.color}`}>
-                      {c.code.split("-")[1]}
+                      {c.code.split("-").pop()}
                     </span>
                     <div className="min-w-0 flex-1">
                       <div className="text-sm font-semibold text-slate-800 dark:text-slate-100 truncate">{c.name}</div>
@@ -331,7 +366,7 @@ function Field({ label, value, editing, onChange, icon: Icon, full }) {
       ) : (
         <div className="flex items-center gap-2 text-sm text-slate-800 dark:text-slate-100 font-medium px-0.5 py-2.5">
           {Icon && <Icon className="w-4 h-4 text-slate-400 dark:text-slate-500 shrink-0" />}
-          <span className="truncate">{value}</span>
+          <span className="truncate">{value || "-"}</span>
         </div>
       )}
     </div>

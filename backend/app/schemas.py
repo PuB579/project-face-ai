@@ -36,6 +36,11 @@ class UserOut(BaseModel):
     full_name: str
 
 
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str = Field(min_length=6)
+
+
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
@@ -81,6 +86,12 @@ class StudentUpdate(BaseModel):
     faculty: str | None = None
     major: str | None = None
     phone: str | None = None
+    is_active: bool | None = None
+
+
+class StudentSelfUpdate(BaseModel):
+    """ข้อมูลที่นักศึกษาแก้เองได้"""
+    phone: str | None = None
 
 
 class StudentOut(BaseModel):
@@ -97,6 +108,10 @@ class StudentOut(BaseModel):
     major: str | None
     phone: str | None
     has_approved_face: bool
+    # สถานะใบหน้าล่าสุด: none (ยังไม่ลงทะเบียน) / pending / approved / rejected
+    face_status: str = "none"
+    face_profile_id: int | None = None
+    is_active: bool = True
     created_at: dt.datetime
 
 
@@ -122,6 +137,14 @@ class TeacherUpdate(BaseModel):
     phone: str | None = None
 
 
+class TeacherSelfUpdate(BaseModel):
+    """ข้อมูลที่อาจารย์แก้เองได้ (department_id ให้แก้ผ่าน /teachers/{id})"""
+    first_name: str | None = None
+    last_name: str | None = None
+    position: str | None = None
+    phone: str | None = None
+
+
 class TeacherOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -135,6 +158,7 @@ class TeacherOut(BaseModel):
     department_id: int | None
     position: str | None
     phone: str | None
+    department_name: str | None = None
     created_at: dt.datetime
 
 
@@ -200,6 +224,13 @@ class ClassUpdate(BaseModel):
 class ClassOut(ClassBase):
     model_config = ConfigDict(from_attributes=True)
     id: int
+    # ข้อมูลประกอบจากรายวิชา (อ่านอย่างเดียว)
+    course_code: str | None = None
+    course_name: str | None = None
+    credit: int | None = None
+    teacher_id: int | None = None
+    teacher_name: str | None = None
+    student_count: int = 0
     created_at: dt.datetime
     updated_at: dt.datetime
 
@@ -294,6 +325,12 @@ class MySessionOut(BaseModel):
     is_open: bool
     my_status: AttendanceStatus | None
     my_check_in_time: dt.time | None
+    my_method: AttendanceMethod | None = None
+    my_confidence: Decimal | None = None
+    late_minutes: int | None = None
+    late_threshold_minutes: int = 5
+    # สถานะที่แท้จริง: present / late / absent / open (เช็คชื่อได้อยู่) / upcoming (ยังไม่ถึงเวลา)
+    status: str
 
 
 class CheckinRequest(BaseModel):
@@ -328,6 +365,27 @@ class AttendanceDetailOut(BaseModel):
     student_id: int | None = None
     student_name: str | None = None
     student_code: str | None = None
+
+
+class AttendanceRecordOut(BaseModel):
+    """หนึ่งแถว = นักศึกษาหนึ่งคน ในคาบเรียนหนึ่งคาบ (รวมคนที่ไม่ได้เช็คชื่อด้วย)"""
+    session_id: int
+    session_date: dt.date
+    start_time: dt.time | None
+    end_time: dt.time | None
+    class_id: int
+    class_code: str | None
+    course_code: str
+    course_name: str
+    enrollment_id: int
+    student_id: int
+    student_code: str
+    student_name: str
+    status: str
+    method: AttendanceMethod | None
+    check_in_time: dt.time | None
+    confidence: Decimal | None
+    late_minutes: int | None
 
 
 class AttendanceSummary(BaseModel):
@@ -392,6 +450,8 @@ class StudentScoreOut(BaseModel):
 class StudentScoreOverride(BaseModel):
     score: Decimal
     note: str | None = None
+    # False = คะแนนนี้ตรงกับที่ระบบคำนวณ (ให้ /recalculate อัปเดตต่อได้)
+    manual: bool = True
 
 
 # ---------------------------------------------------------------------------

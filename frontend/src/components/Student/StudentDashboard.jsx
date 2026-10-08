@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
 import {
   Home,
@@ -38,6 +38,18 @@ import {
   Cell,
 } from "recharts";
 import logoImg from "../../assets/logo-cs.png";
+import { getUser } from "../../lib/api";
+import { useApi } from "../../lib/useApi";
+import { countStatus, dailyTrend, hhmm, initial, isoDate, thaiDate } from "../../lib/format";
+
+// สถานะที่นับเป็น "เช็คชื่อแล้ว"
+const ATTENDED = new Set(["present", "late"]);
+
+function greeting(hour) {
+  if (hour < 12) return "สวัสดีตอนเช้า";
+  if (hour < 17) return "สวัสดีตอนบ่าย";
+  return "สวัสดีตอนเย็น";
+}
 
 const navItems = [
   { icon: Home, label: "หน้าหลัก", to: "/dashboard", active: true },
@@ -51,93 +63,60 @@ const navItems = [
   { icon: Settings, label: "ตั้งค่า", to: "/settings" },
 ];
 
-const todayClasses = [
-  {
-    time: "08:00",
-    endTime: "10:00",
-    subject: "โครงสร้างข้อมูลและอัลกอริทึม",
-    teacher: "รศ. ดร.สมชาย รุ่งเรือง",
-    status: "checked",
-    checkedAt: "08:05 น.",
-  },
-  {
-    time: "10:15",
-    endTime: "12:15",
-    subject: "การเขียนโปรแกรมเว็บ",
-    teacher: "ผศ. ดร.นฤมล พิพัฒน์",
-    status: "checked",
-    checkedAt: "10:20 น.",
-  },
-  {
-    time: "13:00",
-    endTime: "15:00",
-    subject: "ระบบฐานข้อมูล",
-    teacher: "อ. วิชาญ ศรีเกษม",
-    status: "pending",
-  },
-];
-
-const recentCheckins = [
-  {
-    subject: "โครงสร้างข้อมูลและอัลกอริทึม",
-    date: "20 พ.ค. 2567",
-    time: "08:05 น.",
-    status: "ontime",
-  },
-  {
-    subject: "การเขียนโปรแกรมเว็บ",
-    date: "20 พ.ค. 2567",
-    time: "10:20 น.",
-    status: "ontime",
-  },
-  {
-    subject: "คณิตศาสตร์สำหรับวิทยาการคอมพิวเตอร์",
-    date: "19 พ.ค. 2567",
-    time: "09:10 น.",
-    status: "late",
-    lateBy: "สาย 10 นาที",
-  },
-  {
-    subject: "ระบบปฏิบัติการ",
-    date: "19 พ.ค. 2567",
-    time: "13:05 น.",
-    status: "ontime",
-  },
-];
-
-const attendanceTrend = [
-  { day: "1 พ.ค.", rate: 70 },
-  { day: "5 พ.ค.", rate: 78 },
-  { day: "10 พ.ค.", rate: 74 },
-  { day: "15 พ.ค.", rate: 85 },
-  { day: "20 พ.ค.", rate: 80 },
-  { day: "25 พ.ค.", rate: 88 },
-  { day: "30 พ.ค.", rate: 92.5 },
-];
-
-const attendanceSummary = [
-  { name: "ตรงเวลา", value: 20, color: "#22c55e" },
-  { name: "สาย", value: 3, color: "#f59e0b" },
-  { name: "ขาด", value: 1, color: "#ef4444" },
-];
-
-const announcements = [
-  {
-    type: "info",
-    title: "แจ้งการสอบกลางภาค",
-    body: "วิชา โครงสร้างข้อมูลและอัลกอริทึม วันที่ 5 มิถุนายน 2567 เวลา 09:00 - 12:00 น.",
-  },
-  {
-    type: "warning",
-    title: "แจ้งเตือน",
-    body: "กรุณาอัปเดตรูปในหน้าของท่าน เพื่อความแม่นยำในการเช็คชื่อ",
-  },
-];
-
 export default function StudentDashboard() {
+  const user = getUser();
   const [now, setNow] = useState(new Date());
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [monthStart] = useState(() => isoDate(new Date(new Date().getFullYear(), new Date().getMonth(), 1)));
+  const today = isoDate(now);
+  const sessionsReq = useApi(`/attendance/my-sessions?start=${monthStart}&end=${today}`, []);
+  const meReq = useApi("/students/me");
+  const announcementsReq = useApi("/announcements", []);
+  const me = meReq.data;
+  const sessions = sessionsReq.data || [];
 
+  const todayClasses = sessions
+    .filter((s) => s.session_date === today)
+    .map((s) => ({
+      id: s.session_id,
+      time: hhmm(s.start_time),
+      endTime: s.end_time ? hhmm(s.end_time) : "",
+      subject: `${s.course_code} ${s.course_name}`,
+      teacher: s.teacher_name || "-",
+      status: ATTENDED.has(s.status) ? "checked" : s.status,
+      checkedAt: s.my_check_in_time ? `${hhmm(s.my_check_in_time)} น.` : "",
+    }));
+  const checkedToday = todayClasses.filter((c) => c.status === "checked").length;
+
+  const monthCount = countStatus(sessions);
+  const attendanceTrend = dailyTrend(sessions);
+  const attendanceSummary = [
+    { name: "ตรงเวลา", value: monthCount.present, color: "#22c55e" },
+    { name: "สาย", value: monthCount.late, color: "#f59e0b" },
+    { name: "ขาด", value: monthCount.absent, color: "#ef4444" },
+  ];
+
+  const recentCheckins = sessions
+    .filter((s) => ["present", "late", "absent"].includes(s.status))
+    .slice()
+    .reverse()
+    .slice(0, 4)
+    .map((s) => ({
+      id: s.session_id,
+      subject: `${s.course_code} ${s.course_name}`,
+      date: thaiDate(s.session_date),
+      time: s.my_check_in_time ? `${hhmm(s.my_check_in_time)} น.` : "-",
+      status: s.status === "present" ? "ontime" : s.status,
+      lateBy: s.status === "late" ? `สาย ${s.late_minutes ?? 0} นาที` : "ขาดเรียน",
+    }));
+
+  const announcements = (announcementsReq.data || []).slice(0, 2).map((a) => ({
+    id: a.id,
+    type: a.pinned ? "warning" : "info",
+    title: a.title,
+    body: a.body,
+  }));
+  const loadError = sessionsReq.error || meReq.error || announcementsReq.error;
   useEffect(() => {
     const t = setInterval(() => setNow(new Date()), 1000);
     return () => clearInterval(t);
@@ -244,20 +223,15 @@ export default function StudentDashboard() {
 
           <button className="relative w-10 h-10 flex items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100 transition-colors shrink-0">
             <Bell className="w-5 h-5" />
-            <span className="absolute top-1.5 right-1.5 w-4 h-4 rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center">
-              3
-            </span>
           </button>
 
           <button className="flex items-center gap-2.5 pl-2 shrink-0">
-            <img
-              src="https://images.unsplash.com/photo-1633332755192-727a05c4013d?w=100&h=100&fit=crop&crop=faces"
-              alt="นายกฤษฎา ใจดี"
-              className="w-10 h-10 rounded-full object-cover"
-            />
+            <div className="w-10 h-10 rounded-full bg-blue-600 text-white flex items-center justify-center text-sm font-bold">
+              {initial(user?.full_name)}
+            </div>
             <div className="text-left hidden sm:block">
               <div className="text-sm font-semibold text-slate-800 whitespace-nowrap">
-                นายกฤษฎา ใจดี
+                {user?.full_name || "-"}
               </div>
               <div className="text-xs text-slate-400 whitespace-nowrap">นักศึกษา</div>
             </div>
@@ -271,14 +245,15 @@ export default function StudentDashboard() {
           <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
             <div>
               <h1 className="text-2xl font-bold text-slate-900">
-                สวัสดีตอนเช้า <span className="inline-block">👋</span>
+                {greeting(now.getHours())} <span className="inline-block">👋</span>
               </h1>
               <h2 className="text-2xl font-extrabold text-blue-600 mt-1">
-                นายกฤษฎา ใจดี
+                {user?.full_name || "-"}
               </h2>
               <p className="text-sm text-slate-500 mt-1">
-                คณะวิทยาการคอมพิวเตอร์ • รหัสนักศึกษา 6601234567
+                {me ? `${me.faculty || me.major || "นักศึกษา"} • รหัสนักศึกษา ${me.student_code}` : " "}
               </p>
+              {loadError && <p className="text-sm text-red-500 mt-2">{loadError}</p>}
             </div>
 
             <div className="bg-gradient-to-br from-blue-600 to-blue-500 rounded-2xl px-6 py-4 text-white shadow-lg shadow-blue-200 shrink-0 w-full lg:w-72">
@@ -289,7 +264,9 @@ export default function StudentDashboard() {
                   {now.toLocaleDateString("th-TH", { weekday: "long" })}
                 </span>
               </div>
-              <div className="text-sm text-blue-100 mb-2">20 พฤษภาคม 2567</div>
+              <div className="text-sm text-blue-100 mb-2">
+                {now.toLocaleDateString("th-TH", { day: "numeric", month: "long", year: "numeric" })}
+              </div>
               <div className="text-2xl font-bold tracking-wide">{timeStr}</div>
             </div>
           </div>
@@ -300,39 +277,39 @@ export default function StudentDashboard() {
               icon={<ClipboardCheck className="w-6 h-6 text-emerald-600" />}
               iconBg="bg-emerald-100"
               label="เช็คชื่อวันนี้"
-              value="2"
-              unit="/3 วิชา"
-              sub="66.7% ของวันนี้"
-              progress={66.7}
+              value={checkedToday}
+              unit={`/${todayClasses.length} คาบ`}
+              sub={`${todayClasses.length ? ((checkedToday / todayClasses.length) * 100).toFixed(1) : 0}% ของวันนี้`}
+              progress={todayClasses.length ? (checkedToday / todayClasses.length) * 100 : 0}
               barColor="bg-emerald-500"
             />
             <StatCard
               icon={<CalendarCheck className="w-6 h-6 text-blue-600" />}
               iconBg="bg-blue-100"
               label="เช็คชื่อทั้งหมด"
-              value="24"
+              value={monthCount.present + monthCount.late}
               unit="ครั้ง"
               sub="เดือนนี้"
-              sparkline
+              sparkline={attendanceTrend}
             />
             <StatCard
               icon={<Percent className="w-6 h-6 text-purple-600" />}
               iconBg="bg-purple-100"
               label="อัตราการเข้าเรียน"
-              value="92.5"
+              value={monthCount.rate.toFixed(1)}
               unit="%"
               sub="เดือนนี้"
-              progress={92.5}
+              progress={monthCount.rate}
               barColor="bg-purple-500"
             />
             <StatCard
               icon={<Trophy className="w-6 h-6 text-amber-500" />}
               iconBg="bg-amber-100"
-              label="อันดับในชั้นเรียน"
-              value="5"
-              unit="/45"
-              sub="จากทั้งหมด"
-              progress={(1 - 5 / 45) * 100}
+              label="ขาดเรียน"
+              value={monthCount.absent}
+              unit="ครั้ง"
+              sub={`มาสาย ${monthCount.late} ครั้ง • เดือนนี้`}
+              progress={monthCount.total ? (monthCount.absent / monthCount.total) * 100 : 0}
               barColor="bg-amber-500"
             />
           </div>
@@ -342,18 +319,20 @@ export default function StudentDashboard() {
             <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-6">
               <div className="flex items-center justify-between mb-4">
                 <h3 className="font-bold text-slate-900">วิชาเรียนวันนี้</h3>
-                <a
-                  href="#"
-                  className="text-sm text-blue-600 font-medium hover:underline"
-                >
+                <Link to="/schedule" className="text-sm text-blue-600 font-medium hover:underline">
                   ดูทั้งหมด
-                </a>
+                </Link>
               </div>
 
               <div className="space-y-3">
+                {todayClasses.length === 0 && (
+                  <div className="text-sm text-slate-400 py-4 text-center">
+                    {sessionsReq.loading ? "กำลังโหลด..." : "วันนี้ไม่มีคาบเรียนที่เปิดเช็คชื่อ"}
+                  </div>
+                )}
                 {todayClasses.map((c) => (
                   <div
-                    key={c.subject}
+                    key={c.id}
                     className="flex items-center gap-4 p-3 rounded-xl border border-slate-100 hover:bg-slate-50 transition-colors"
                   >
                     <div className="shrink-0 bg-blue-50 text-blue-700 text-xs font-semibold rounded-lg px-3 py-2 text-center leading-tight">
@@ -383,15 +362,19 @@ export default function StudentDashboard() {
                           <CheckCircle2 className="w-4 h-4 text-emerald-600" />
                         </div>
                       </div>
+                    ) : c.status === "absent" ? (
+                      <span className="text-xs font-semibold text-red-500 bg-red-50 px-3 py-1.5 rounded-lg shrink-0">
+                        ขาดเรียน
+                      </span>
                     ) : (
-                      <div className="flex items-center gap-2 shrink-0">
+                      <Link to="/checkin" className="flex items-center gap-2 shrink-0">
                         <span className="text-xs font-semibold text-blue-600 bg-blue-50 px-3 py-1.5 rounded-lg">
-                          รอเช็คชื่อ
+                          {c.status === "open" ? "รอเช็คชื่อ" : "ยังไม่ถึงเวลา"}
                         </span>
                         <div className="w-7 h-7 rounded-full bg-blue-50 flex items-center justify-center">
                           <Clock className="w-4 h-4 text-blue-500" />
                         </div>
-                      </div>
+                      </Link>
                     )}
                   </div>
                 ))}
@@ -399,29 +382,27 @@ export default function StudentDashboard() {
 
               <div className="flex items-center gap-2 mt-4 bg-blue-50 text-blue-600 text-xs rounded-xl px-4 py-3">
                 <AlertTriangle className="w-4 h-4 shrink-0" />
-                กรุณาเช็คชื่อภายในเวลา 15 นาทีหลังจากเริ่มคาบเรียน
+                กรุณาเช็คชื่อภายในช่วงเวลาที่อาจารย์กำหนดของแต่ละคาบเรียน
               </div>
             </div>
 
             <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-6">
               <div className="flex items-center justify-between mb-4">
                 <h3 className="font-bold text-slate-900">การเช็คชื่อล่าสุด</h3>
-                <a
-                  href="#"
-                  className="text-sm text-blue-600 font-medium hover:underline"
-                >
+                <Link to="/history" className="text-sm text-blue-600 font-medium hover:underline">
                   ดูทั้งหมด
-                </a>
+                </Link>
               </div>
 
               <div className="space-y-4">
-                {recentCheckins.map((r, i) => (
-                  <div key={i} className="flex items-center gap-3">
-                    <img
-                      src={`https://images.unsplash.com/photo-1633332755192-727a05c4013d?w=80&h=80&fit=crop&crop=faces&sig=${i}`}
-                      alt=""
-                      className="w-9 h-9 rounded-full object-cover shrink-0"
-                    />
+                {recentCheckins.length === 0 && (
+                  <div className="text-sm text-slate-400 py-4 text-center">ยังไม่มีประวัติการเช็คชื่อเดือนนี้</div>
+                )}
+                {recentCheckins.map((r) => (
+                  <div key={r.id} className="flex items-center gap-3">
+                    <div className="w-9 h-9 rounded-full bg-blue-50 text-blue-600 flex items-center justify-center shrink-0">
+                      <ClipboardCheck className="w-4 h-4" />
+                    </div>
                     <div className="min-w-0 flex-1">
                       <div className="text-sm font-medium text-slate-800 truncate">
                         {r.subject}
@@ -434,7 +415,9 @@ export default function StudentDashboard() {
                       className={`text-[11px] font-semibold px-2.5 py-1 rounded-lg shrink-0 ${
                         r.status === "ontime"
                           ? "bg-emerald-100 text-emerald-600"
-                          : "bg-amber-100 text-amber-600"
+                          : r.status === "late"
+                            ? "bg-amber-100 text-amber-600"
+                            : "bg-red-100 text-red-600"
                       }`}
                     >
                       {r.status === "ontime" ? "ตรงเวลา" : r.lateBy}
@@ -452,9 +435,7 @@ export default function StudentDashboard() {
                 <h3 className="font-bold text-slate-900">
                   สถิติการเข้าเรียน (เดือนนี้)
                 </h3>
-                <button className="flex items-center gap-1 text-xs font-medium text-slate-500 border border-slate-200 rounded-lg px-3 py-1.5">
-                  เดือนนี้ <ChevronDown className="w-3.5 h-3.5" />
-                </button>
+
               </div>
               <div className="h-64">
                 <ResponsiveContainer width="100%" height="100%">
@@ -510,7 +491,7 @@ export default function StudentDashboard() {
                   </PieChart>
                 </ResponsiveContainer>
                 <div className="absolute inset-0 flex flex-col items-center justify-center">
-                  <div className="text-2xl font-bold text-slate-900">24</div>
+                  <div className="text-2xl font-bold text-slate-900">{monthCount.total}</div>
                   <div className="text-xs text-slate-400">ครั้ง</div>
                 </div>
               </div>
@@ -525,13 +506,7 @@ export default function StudentDashboard() {
                       <span className="text-slate-600">{s.name}</span>
                     </div>
                     <span className="text-slate-800 font-medium">
-                      {s.value} (
-                      {(
-                        (s.value /
-                          attendanceSummary.reduce((a, b) => a + b.value, 0)) *
-                        100
-                      ).toFixed(1)}
-                      %)
+                      {s.value} ({monthCount.total ? ((s.value / monthCount.total) * 100).toFixed(1) : "0.0"}%)
                     </span>
                   </div>
                 ))}
@@ -541,17 +516,16 @@ export default function StudentDashboard() {
             <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-6">
               <div className="flex items-center justify-between mb-4">
                 <h3 className="font-bold text-slate-900">ประกาศจากอาจารย์</h3>
-                <a
-                  href="#"
-                  className="text-sm text-blue-600 font-medium hover:underline"
-                >
+                <Link to="/announcements" className="text-sm text-blue-600 font-medium hover:underline">
                   ดูทั้งหมด
-                </a>
+                </Link>
               </div>
               <div className="space-y-3">
-                {announcements.map((a, i) => (
-                  <button
-                    key={i}
+                {announcements.length === 0 && <div className="text-sm text-slate-400">ยังไม่มีประกาศ</div>}
+                {announcements.map((a) => (
+                  <Link
+                    to="/announcements"
+                    key={a.id}
                     className={`w-full flex items-start gap-3 text-left rounded-xl p-4 transition-colors ${
                       a.type === "info"
                         ? "bg-blue-50 hover:bg-blue-100/70"
@@ -577,12 +551,12 @@ export default function StudentDashboard() {
                       >
                         {a.title}
                       </div>
-                      <div className="text-xs text-slate-500 leading-relaxed">
+                      <div className="text-xs text-slate-500 leading-relaxed line-clamp-3">
                         {a.body}
                       </div>
                     </div>
                     <ChevronRight className="w-4 h-4 text-slate-300 shrink-0 mt-1" />
-                  </button>
+                  </Link>
                 ))}
               </div>
             </div>
@@ -618,7 +592,7 @@ function StatCard({ icon, iconBg, label, value, unit, sub, progress, barColor, s
       {sparkline && (
         <div className="h-6">
           <ResponsiveContainer width="100%" height="100%">
-            <LineChart data={attendanceTrend}>
+            <LineChart data={sparkline}>
               <Line
                 type="monotone"
                 dataKey="rate"

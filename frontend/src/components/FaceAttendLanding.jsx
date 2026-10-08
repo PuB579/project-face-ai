@@ -1,5 +1,5 @@
 import { Link } from "react-router-dom";
-import React, { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import logoImg from "../assets/logo-cs.png";
 import bgHero from "../assets/bg-hero.jpg";
 import {

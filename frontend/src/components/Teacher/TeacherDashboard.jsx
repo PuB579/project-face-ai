@@ -1,8 +1,6 @@
 import {
   BookOpen,
   Users,
-  Bell,
-  ChevronDown,
   CheckCircle2,
   Loader2,
   Circle,
@@ -24,107 +22,135 @@ import {
   Pie,
   Cell,
 } from "recharts";
+import { Link } from "react-router-dom";
 import TeacherLayout from "./TeacherLayout";
+import LoadState from "../LoadState";
 import { useAppearanceSettings } from "./useAppearanceSettings";
-
-const attendanceTrend = [
-  { day: "14 พ.ค.", present: 60, absent: 22 },
-  { day: "15 พ.ค.", present: 80, absent: 30 },
-  { day: "16 พ.ค.", present: 76, absent: 26 },
-  { day: "17 พ.ค.", present: 82, absent: 34 },
-  { day: "18 พ.ค.", present: 78, absent: 24 },
-  { day: "19 พ.ค.", present: 90, absent: 32 },
-  { day: "20 พ.ค.", present: 78, absent: 28 },
-];
-
-const todaySummary = [
-  { name: "เข้าเรียน", value: 95, pct: "74.22%", color: "#22c55e" },
-  { name: "ขาดเรียน", value: 33, pct: "25.78%", color: "#ef4444" },
-  { name: "ลากิจ", value: 0, pct: "0.00%", color: "#94a3b8" },
-  { name: "มาสาย", value: 2, pct: "1.56%", color: "#f59e0b" },
-];
-
-const recentCheckins = [
-  { time: "10:30", subject: "โครงสร้างข้อมูล (Data Structures)", room: "CS-201", attend: "28/32", status: "done" },
-  { time: "09:00", subject: "การเขียนโปรแกรมเชิงวัตถุ (OOP)", room: "CS-202", attend: "26/30", status: "done" },
-  { time: "13:30", subject: "ฐานข้อมูล (Database Systems)", room: "CS-203", attend: "22/28", status: "progress" },
-  { time: "08:00", subject: "ปัญญาประดิษฐ์เบื้องต้น (AI Intro)", room: "CS-204", attend: "19/24", status: "done" },
-  { time: "15:30", subject: "ระบบปฏิบัติการ (Operating Systems)", room: "CS-205", attend: "-", status: "notstarted" },
-];
-
-const myCourses = [
-  { code: "CS-201", name: "โครงสร้างข้อมูล (Data Structures)", students: "นักศึกษา 32 คน", status: "เช็คชื่อแล้ว 10:30", statusColor: "text-emerald-600 dark:text-emerald-400", pct: 87 },
-  { code: "CS-202", name: "การเขียนโปรแกรมเชิงวัตถุ (OOP)", students: "นักศึกษา 30 คน", status: "เช็คชื่อแล้ว 09:00", statusColor: "text-emerald-600 dark:text-emerald-400", pct: 86 },
-  { code: "CS-203", name: "ฐานข้อมูล (Database Systems)", students: "นักศึกษา 28 คน", status: "กำลังดำเนินการ", statusColor: "text-blue-600 dark:text-blue-400", pct: 78 },
-  { code: "CS-204", name: "ปัญญาประดิษฐ์เบื้องต้น (AI Intro)", students: "นักศึกษา 24 คน", status: "เช็คชื่อแล้ว 08:00", statusColor: "text-emerald-600 dark:text-emerald-400", pct: 79 },
-  { code: "CS-205", name: "ระบบปฏิบัติการ (Operating Systems)", students: "นักศึกษา 14 คน", status: "ยังไม่เริ่ม", statusColor: "text-slate-400 dark:text-slate-500", pct: 0 },
-];
-
-const courseIconColors = [
-  "bg-blue-100 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400",
-  "bg-purple-100 dark:bg-purple-950/40 text-purple-600 dark:text-purple-400",
-  "bg-amber-100 dark:bg-amber-950/40 text-amber-600 dark:text-amber-400",
-  "bg-emerald-100 dark:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400",
-  "bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400",
-];
+import { colorOf, useTeacherData } from "./useTeacherData";
+import { getUser } from "../../lib/api";
+import { addDays, countStatus, dailyTrend, groupBy, hhmm, isoDate, pct, thaiDate } from "../../lib/format";
 
 export default function TeacherDashboard() {
   const { t } = useAppearanceSettings();
-  const totalToday = todaySummary.reduce((a, b) => a + b.value, 0);
+  const user = getUser();
+  const today = isoDate();
+  const { classes, records, loading, error, reload } = useTeacherData({
+    start: isoDate(addDays(new Date(), -6)),
+    end: today,
+  });
+
+  const todayRows = records.filter((r) => r.session_date === today);
+  const todayCount = countStatus(todayRows);
+  const todayPending = todayRows.filter((r) => r.status === "open" || r.status === "upcoming").length;
+  const totalStudents = classes.reduce((sum, c) => sum + c.student_count, 0);
+
+  // "เข้าเรียน" ในกราฟ = ตรงเวลา + สาย
+  const attendanceTrend = dailyTrend(records).map((d) => ({ ...d, present: d.present + d.late }));
+
+  const totalToday = todayRows.length;
+  const todaySummary = [
+    { name: t("common.status.present"), value: todayCount.present, color: "#22c55e" },
+    { name: t("common.status.late"), value: todayCount.late, color: "#f59e0b" },
+    { name: t("common.status.absent"), value: todayCount.absent, color: "#ef4444" },
+    { name: t("live.waiting"), value: todayPending, color: "#94a3b8" },
+  ].map((s) => ({ ...s, pct: `${pct(s.value, totalToday).toFixed(2)}%` }));
+
+  // คาบเรียนวันนี้ (แถวละหนึ่งคาบ)
+  const todaySessions = [...groupBy(todayRows, (r) => r.session_id).values()]
+    .map((rows) => {
+      const first = rows[0];
+      const c = countStatus(rows);
+      const open = rows.some((r) => r.status === "open");
+      const upcoming = rows.every((r) => r.status === "upcoming");
+      return {
+        id: first.session_id,
+        time: hhmm(first.start_time),
+        subject: `${first.course_code} ${first.course_name}`,
+        room: first.class_code || "-",
+        attend: upcoming ? "-" : `${c.present + c.late}/${rows.length}`,
+        status: upcoming ? "notstarted" : open ? "progress" : "done",
+      };
+    })
+    .sort((a, b) => (a.time < b.time ? -1 : 1));
+
+  const recordsByClass = groupBy(records, (r) => r.class_id);
+  const myCourses = classes.map((cls) => {
+    const rows = recordsByClass.get(cls.id) || [];
+    const todayOfClass = rows.filter((r) => r.session_date === today);
+    let status = t("common.status.notStarted");
+    let statusColor = "text-slate-400 dark:text-slate-500";
+    if (todayOfClass.some((r) => r.status === "open")) {
+      status = t("common.status.inProgress");
+      statusColor = "text-blue-600 dark:text-blue-400";
+    } else if (todayOfClass.length) {
+      status = `${t("live.checkedAt")} ${hhmm(todayOfClass[0].start_time)}`;
+      statusColor = "text-emerald-600 dark:text-emerald-400";
+    }
+    return {
+      id: cls.id,
+      code: cls.course_code || "",
+      name: cls.course_name,
+      students: `${t("live.studentsPrefix")} ${cls.student_count} ${t("common.units.people")}`,
+      status,
+      statusColor,
+      pct: Math.round(countStatus(rows).rate),
+    };
+  });
 
   return (
     <TeacherLayout
       titleContent={
         <>
-          {t("dashboard.greeting")}, อาจารย์ณัฐวุฒิ <span className="inline-block">👋</span>
+          {t("dashboard.greeting")}, {user?.full_name} <span className="inline-block">👋</span>
         </>
       }
       subtitleKey="dashboard.subtitle"
       headerExtra={
         <button className="hidden sm:flex items-center gap-2 border border-slate-200 dark:border-slate-700 rounded-xl px-4 py-2.5 text-sm text-slate-600 dark:text-slate-300 font-medium hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors shrink-0">
           <CalendarDays className="w-4 h-4 text-slate-400 dark:text-slate-500" />
-          20 พฤษภาคม 2567
-          <ChevronDown className="w-4 h-4 text-slate-400 dark:text-slate-500" />
+          {thaiDate(today, { day: "numeric", month: "long", year: "numeric" })}
         </button>
       }
     >
+      <LoadState loading={loading} error={error} onRetry={reload} />
+
       {/* Stat cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-5">
         <StatCard
           icon={<BookOpen className="w-6 h-6 text-blue-600 dark:text-blue-400" />}
           iconBg="bg-blue-100 dark:bg-blue-950/40"
           label={t("dashboard.stats.totalCourses")}
-          value="5"
+          value={classes.length}
           sub={t("dashboard.stats.totalCoursesSub")}
         />
         <StatCard
           icon={<Users className="w-6 h-6 text-emerald-600 dark:text-emerald-400" />}
           iconBg="bg-emerald-100 dark:bg-emerald-950/40"
           label={t("dashboard.stats.totalStudents")}
-          value="128"
+          value={totalStudents}
           sub={t("dashboard.stats.totalStudentsSub")}
         />
         <StatCard
           icon={<CalendarCheck className="w-6 h-6 text-purple-600 dark:text-purple-400" />}
           iconBg="bg-purple-100 dark:bg-purple-950/40"
           label={t("dashboard.stats.checkinToday")}
-          value="4"
+          value={todaySessions.length}
           sub={t("dashboard.stats.checkinTodaySub")}
         />
         <StatCard
           icon={<UserCheck className="w-6 h-6 text-amber-600 dark:text-amber-400" />}
           iconBg="bg-amber-100 dark:bg-amber-950/40"
           label={t("dashboard.stats.present")}
-          value="95"
-          sub="74.22%"
+          value={todayCount.present + todayCount.late}
+          sub={`${pct(todayCount.present + todayCount.late, totalToday).toFixed(2)}%`}
           subColor="text-emerald-600 dark:text-emerald-400"
         />
         <StatCard
           icon={<UserX className="w-6 h-6 text-red-600 dark:text-red-400" />}
           iconBg="bg-red-100 dark:bg-red-950/40"
           label={t("dashboard.stats.absent")}
-          value="33"
-          sub="25.78%"
+          value={todayCount.absent}
+          sub={`${pct(todayCount.absent, totalToday).toFixed(2)}%`}
           subColor="text-red-500 dark:text-red-400"
         />
       </div>
@@ -134,9 +160,9 @@ export default function TeacherDashboard() {
         <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-100 dark:border-slate-800 shadow-sm p-6">
           <div className="flex items-center justify-between mb-4">
             <h3 className="font-bold text-slate-900 dark:text-slate-100">{t("dashboard.trendTitle")}</h3>
-            <button className="flex items-center gap-1 text-xs font-medium text-slate-500 dark:text-slate-400 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-1.5">
-              {t("dashboard.last7Days")} <ChevronDown className="w-3.5 h-3.5" />
-            </button>
+            <span className="text-xs font-medium text-slate-500 dark:text-slate-400 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-1.5">
+              {t("dashboard.last7Days")}
+            </span>
           </div>
           <div className="h-64">
             <ResponsiveContainer width="100%" height="100%">
@@ -201,7 +227,7 @@ export default function TeacherDashboard() {
               <Users className="w-4 h-4" />
               {t("dashboard.attendanceRateToday")}
             </span>
-            <span className="font-bold">74.22%</span>
+            <span className="font-bold">{todayCount.rate.toFixed(2)}%</span>
           </div>
         </div>
       </div>
@@ -211,9 +237,9 @@ export default function TeacherDashboard() {
         <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-100 dark:border-slate-800 shadow-sm p-6 overflow-x-auto">
           <div className="flex items-center justify-between mb-4">
             <h3 className="font-bold text-slate-900 dark:text-slate-100">{t("dashboard.recentCheckins")}</h3>
-            <a href="#" className="text-sm text-blue-600 dark:text-blue-400 font-medium hover:underline">
+            <Link to="/teacher-history" className="text-sm text-blue-600 dark:text-blue-400 font-medium hover:underline">
               {t("common.actions.viewAll")}
-            </a>
+            </Link>
           </div>
           <table className="w-full text-sm min-w-[500px]">
             <thead>
@@ -226,8 +252,15 @@ export default function TeacherDashboard() {
               </tr>
             </thead>
             <tbody>
-              {recentCheckins.map((r, i) => (
-                <tr key={i} className="border-b border-slate-50 dark:border-slate-800/60 last:border-0">
+              {todaySessions.length === 0 && (
+                <tr>
+                  <td colSpan={5} className="py-6 text-center text-sm text-slate-400 dark:text-slate-500">
+                    {t("live.noSessionToday")}
+                  </td>
+                </tr>
+              )}
+              {todaySessions.map((r) => (
+                <tr key={r.id} className="border-b border-slate-50 dark:border-slate-800/60 last:border-0">
                   <td className="py-3 pr-3 text-slate-500 dark:text-slate-400 whitespace-nowrap">{r.time}</td>
                   <td className="py-3 pr-3 text-slate-800 dark:text-slate-100 font-medium whitespace-nowrap">{r.subject}</td>
                   <td className="py-3 pr-3 text-slate-500 dark:text-slate-400 whitespace-nowrap">{r.room}</td>
@@ -261,15 +294,18 @@ export default function TeacherDashboard() {
         <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-100 dark:border-slate-800 shadow-sm p-6">
           <div className="flex items-center justify-between mb-4">
             <h3 className="font-bold text-slate-900 dark:text-slate-100">{t("dashboard.myCourses")}</h3>
-            <a href="#" className="text-sm text-blue-600 dark:text-blue-400 font-medium hover:underline">
+            <Link to="/teacher-courses" className="text-sm text-blue-600 dark:text-blue-400 font-medium hover:underline">
               {t("common.actions.viewAll")}
-            </a>
+            </Link>
           </div>
           <div className="space-y-4">
+            {myCourses.length === 0 && !loading && (
+              <div className="text-sm text-slate-400 dark:text-slate-500">{t("live.noCourses")}</div>
+            )}
             {myCourses.map((c, i) => (
-              <div key={c.code} className="flex items-center gap-3">
-                <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 font-bold text-xs ${courseIconColors[i]}`}>
-                  {c.code.split("-")[1]}
+              <div key={c.id} className="flex items-center gap-3">
+                <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 font-bold text-xs ${colorOf(i).icon}`}>
+                  {c.code.split("-").pop()}
                 </div>
                 <div className="min-w-0 flex-1">
                   <div className="text-sm font-semibold text-slate-800 dark:text-slate-100 truncate">{c.name}</div>

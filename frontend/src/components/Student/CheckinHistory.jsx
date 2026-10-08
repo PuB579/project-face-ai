@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import { useState } from "react";
 import { Link } from "react-router-dom";
 import {
   Home,
@@ -26,6 +26,9 @@ import {
   Calendar,
 } from "lucide-react";
 import logoImg from "../../assets/logo-cs.png";
+import { getUser } from "../../lib/api";
+import { useApi } from "../../lib/useApi";
+import { countStatus, downloadBlob, hhmm, initial, isoDate, thaiDate, toCsv } from "../../lib/format";
 
 const navItems = [
   { icon: Home, label: "หน้าหลัก", to: "/dashboard" },
@@ -39,55 +42,70 @@ const navItems = [
   { icon: Settings, label: "ตั้งค่า", to: "/settings" },
 ];
 
-const courses = {
-  "CS-201": "โครงสร้างข้อมูล (Data Structures)",
-  "CS-202": "การเขียนโปรแกรมเชิงวัตถุ (OOP)",
-  "CS-203": "ฐานข้อมูล (Database Systems)",
-};
-
-// 24 mock records, 8 shown per page
-const rawRecords = [
-  { date: "20 พ.ค. 2567", time: "08:45:30", code: "CS-201", room: "CS-201", status: "ontime" },
-  { date: "20 พ.ค. 2567", time: "10:20:15", code: "CS-202", room: "CS-202", status: "late" },
-  { date: "19 พ.ค. 2567", time: "13:30:00", code: "CS-203", room: "CS-203", status: "ontime" },
-  { date: "17 พ.ค. 2567", time: "08:30:25", code: "CS-201", room: "CS-201", status: "ontime" },
-  { date: "17 พ.ค. 2567", time: "10:25:40", code: "CS-202", room: "CS-202", status: "ontime" },
-  { date: "16 พ.ค. 2567", time: "13:28:10", code: "CS-203", room: "CS-203", status: "ontime" },
-  { date: "15 พ.ค. 2567", time: "08:40:05", code: "CS-201", room: "CS-201", status: "late" },
-  { date: "15 พ.ค. 2567", time: "10:30:12", code: "CS-202", room: "CS-202", status: "ontime" },
-  { date: "13 พ.ค. 2567", time: "13:31:02", code: "CS-203", room: "CS-203", status: "ontime" },
-  { date: "13 พ.ค. 2567", time: "08:28:44", code: "CS-201", room: "CS-201", status: "ontime" },
-  { date: "10 พ.ค. 2567", time: "10:22:19", code: "CS-202", room: "CS-202", status: "ontime" },
-  { date: "10 พ.ค. 2567", time: "13:29:55", code: "CS-203", room: "CS-203", status: "late" },
-  { date: "09 พ.ค. 2567", time: "08:31:08", code: "CS-201", room: "CS-201", status: "ontime" },
-  { date: "09 พ.ค. 2567", time: "10:19:37", code: "CS-202", room: "CS-202", status: "ontime" },
-  { date: "08 พ.ค. 2567", time: "13:30:41", code: "CS-203", room: "CS-203", status: "ontime" },
-  { date: "06 พ.ค. 2567", time: "08:27:52", code: "CS-201", room: "CS-201", status: "ontime" },
-  { date: "06 พ.ค. 2567", time: "10:24:03", code: "CS-202", room: "CS-202", status: "ontime" },
-  { date: "03 พ.ค. 2567", time: "13:32:29", code: "CS-203", room: "CS-203", status: "ontime" },
-  { date: "02 พ.ค. 2567", time: "08:29:15", code: "CS-201", room: "CS-201", status: "ontime" },
-  { date: "02 พ.ค. 2567", time: "10:21:58", code: "CS-202", room: "CS-202", status: "ontime" },
-  { date: "01 พ.ค. 2567", time: "13:27:33", code: "CS-203", room: "CS-203", status: "ontime" },
-  { date: "01 พ.ค. 2567", time: "08:33:47", code: "CS-201", room: "CS-201", status: "ontime" },
-];
-
-const totalRecords = 24;
 const PAGE_SIZE = 8;
 
 const statusMeta = {
-  ontime: { label: "เข้าเรียน", cls: "bg-emerald-100 text-emerald-600", icon: CheckCircle2 },
+  present: { label: "เข้าเรียน", cls: "bg-emerald-100 text-emerald-600", icon: CheckCircle2 },
   late: { label: "สาย", cls: "bg-amber-100 text-amber-600", icon: Clock },
   absent: { label: "ขาดเรียน", cls: "bg-red-100 text-red-600", icon: XCircle },
 };
 
 export default function CheckinHistory() {
+  const user = getUser();
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [page, setPage] = useState(1);
+  const [today] = useState(() => isoDate());
+  const [course, setCourse] = useState("");
+  const [status, setStatus] = useState("");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+  // ประวัติทั้งหมดตั้งแต่ลงทะเบียน (เฉพาะคาบที่มีผลแล้ว)
+  const { data, error, loading } = useApi(`/attendance/my-sessions?start=2000-01-01&end=${today}`, []);
+  const all = (data || []).filter((s) => statusMeta[s.status]).reverse();
+  const courseCodes = [...new Set(all.map((s) => s.course_code))];
 
-  const totalPages = Math.ceil(totalRecords / PAGE_SIZE);
-  const start = (page - 1) * PAGE_SIZE;
-  const pageRecords = rawRecords.slice(start, start + PAGE_SIZE);
+  const records = all.filter(
+    (s) =>
+      (!course || s.course_code === course) &&
+      (!status || s.status === status) &&
+      (!dateFrom || s.session_date >= dateFrom) &&
+      (!dateTo || s.session_date <= dateTo)
+  );
+  const counts = countStatus(records);
+  const pctOf = (n) => `${counts.total ? ((n / counts.total) * 100).toFixed(2) : 0}%`;
 
+  const totalRecords = records.length;
+  const totalPages = Math.max(1, Math.ceil(totalRecords / PAGE_SIZE));
+  const currentPage = Math.min(page, totalPages);
+  const start = (currentPage - 1) * PAGE_SIZE;
+  const pageRecords = records.slice(start, start + PAGE_SIZE);
+
+  const detailOf = (r) => {
+    if (r.status === "absent") return "ไม่ได้เช็คชื่อในเวลาที่กำหนด";
+    const parts = [];
+    if (r.status === "late") parts.push(`สาย ${r.late_minutes ?? 0} นาที`);
+    if (r.my_confidence) parts.push(`ความมั่นใจ ${Number(r.my_confidence).toFixed(1)}%`);
+    return parts.join(" • ") || "-";
+  };
+
+  const exportCsv = () => {
+    const headers = ["วันที่", "เวลาเช็คชื่อ", "รหัสวิชา", "รายวิชา", "กลุ่มเรียน", "สถานะ", "วิธีเช็คชื่อ", "รายละเอียด"];
+    const rows = records.map((r) => [
+      thaiDate(r.session_date),
+      r.my_check_in_time ? hhmm(r.my_check_in_time) : "-",
+      r.course_code,
+      r.course_name,
+      r.class_code || "-",
+      statusMeta[r.status].label,
+      r.my_method === "manual" ? "อาจารย์บันทึก" : r.my_method === "face" ? "สแกนใบหน้า" : "-",
+      detailOf(r),
+    ]);
+    downloadBlob(`ประวัติการเช็คชื่อ_${today}.csv`, toCsv(headers, rows));
+  };
+  const resetPage = (fn) => (e) => {
+    fn(e.target.value);
+    setPage(1);
+  };
   return (
     <div className="min-h-screen w-full bg-slate-50 font-sans flex">
       {/* ---------- Sidebar ---------- */}
@@ -183,20 +201,15 @@ export default function CheckinHistory() {
 
           <button className="relative w-10 h-10 flex items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100 transition-colors shrink-0">
             <Bell className="w-5 h-5" />
-            <span className="absolute top-1.5 right-1.5 w-4 h-4 rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center">
-              3
-            </span>
           </button>
 
           <button className="flex items-center gap-2.5 pl-2 shrink-0">
-            <img
-              src="https://images.unsplash.com/photo-1633332755192-727a05c4013d?w=100&h=100&fit=crop&crop=faces"
-              alt="นายกฤษฎา ใจดี"
-              className="w-10 h-10 rounded-full object-cover"
-            />
+            <div className="w-10 h-10 rounded-full bg-blue-600 text-white flex items-center justify-center text-sm font-bold">
+              {initial(user?.full_name)}
+            </div>
             <div className="text-left hidden sm:block">
               <div className="text-sm font-semibold text-slate-800 whitespace-nowrap">
-                นายกฤษฎา ใจดี
+                {user?.full_name || "-"}
               </div>
               <div className="text-xs text-slate-400 whitespace-nowrap">นักศึกษา</div>
             </div>
@@ -224,38 +237,38 @@ export default function CheckinHistory() {
               icon={<Calendar className="w-6 h-6 text-blue-600" />}
               iconBg="bg-blue-100"
               label="เช็คชื่อทั้งหมด"
-              value="24"
+              value={counts.total}
               unit="ครั้ง"
             />
             <StatCard
               icon={<CheckCircle2 className="w-6 h-6 text-emerald-600" />}
               iconBg="bg-emerald-100"
               label="เข้าเรียน"
-              value="22"
-              sub="91.67%"
+              value={counts.present}
+              sub={pctOf(counts.present)}
               subColor="text-emerald-600"
             />
             <StatCard
               icon={<Clock className="w-6 h-6 text-amber-500" />}
               iconBg="bg-amber-100"
               label="สาย"
-              value="2"
-              sub="8.33%"
+              value={counts.late}
+              sub={pctOf(counts.late)}
               subColor="text-amber-500"
             />
             <StatCard
               icon={<XCircle className="w-6 h-6 text-red-500" />}
               iconBg="bg-red-100"
               label="ขาดเรียน"
-              value="0"
-              sub="0%"
+              value={counts.absent}
+              sub={pctOf(counts.absent)}
               subColor="text-red-500"
             />
             <StatCard
               icon={<CalendarClock className="w-6 h-6 text-purple-600" />}
               iconBg="bg-purple-100"
               label="เช็คชื่อวันนี้"
-              value="1"
+              value={all.filter((s) => s.session_date === today && s.status !== "absent").length}
               unit="ครั้ง"
             />
           </div>
@@ -263,28 +276,30 @@ export default function CheckinHistory() {
           {/* Filters + table */}
           <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
             <div className="flex flex-col md:flex-row md:items-center gap-3 p-5 border-b border-slate-100">
-              <select className="border border-slate-200 rounded-xl px-4 py-2.5 text-sm text-slate-600 font-medium focus:outline-none focus:ring-2 focus:ring-blue-200">
-                <option>ทั้งหมด</option>
-                <option>CS-201</option>
-                <option>CS-202</option>
-                <option>CS-203</option>
+              <select value={course} onChange={resetPage(setCourse)} className="border border-slate-200 rounded-xl px-4 py-2.5 text-sm text-slate-600 font-medium focus:outline-none focus:ring-2 focus:ring-blue-200">
+                <option value="">ทุกรายวิชา</option>
+                {courseCodes.map((c) => (
+                  <option key={c} value={c}>
+                    {c}
+                  </option>
+                ))}
               </select>
-
-              <button className="flex items-center gap-2 border border-slate-200 rounded-xl px-4 py-2.5 text-sm text-slate-600 font-medium hover:bg-slate-50 transition-colors">
+              <div className="flex items-center gap-2 border border-slate-200 rounded-xl px-3 py-1.5 text-sm text-slate-600">
                 <Calendar className="w-4 h-4 text-slate-400" />
-                01 พฤษภาคม 2567 - 20 พฤษภาคม 2567
-              </button>
-
-              <select className="border border-slate-200 rounded-xl px-4 py-2.5 text-sm text-slate-600 font-medium focus:outline-none focus:ring-2 focus:ring-blue-200">
-                <option>สถานะทั้งหมด</option>
-                <option>เข้าเรียน</option>
-                <option>สาย</option>
-                <option>ขาดเรียน</option>
+                <input type="date" value={dateFrom} max={dateTo || undefined} onChange={resetPage(setDateFrom)} className="focus:outline-none" />
+                <span className="text-slate-400">-</span>
+                <input type="date" value={dateTo} min={dateFrom || undefined} onChange={resetPage(setDateTo)} className="focus:outline-none" />
+              </div>
+              <select value={status} onChange={resetPage(setStatus)} className="border border-slate-200 rounded-xl px-4 py-2.5 text-sm text-slate-600 font-medium focus:outline-none focus:ring-2 focus:ring-blue-200">
+                <option value="">สถานะทั้งหมด</option>
+                <option value="present">เข้าเรียน</option>
+                <option value="late">สาย</option>
+                <option value="absent">ขาดเรียน</option>
               </select>
 
               <div className="flex-1" />
 
-              <button className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 transition-colors text-white text-sm font-semibold px-5 py-2.5 rounded-xl shadow-sm shadow-blue-200">
+              <button onClick={exportCsv} disabled={!records.length} className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 transition-colors text-white text-sm font-semibold px-5 py-2.5 rounded-xl shadow-sm shadow-blue-200">
                 <Download className="w-4 h-4" />
                 ส่งออกข้อมูล
               </button>
@@ -297,25 +312,34 @@ export default function CheckinHistory() {
                     <th className="py-3 px-5 font-medium">วันที่</th>
                     <th className="py-3 px-3 font-medium">เวลา</th>
                     <th className="py-3 px-3 font-medium">รายวิชา</th>
-                    <th className="py-3 px-3 font-medium">ห้องเรียน</th>
+                    <th className="py-3 px-3 font-medium">กลุ่มเรียน</th>
                     <th className="py-3 px-3 font-medium">สถานะ</th>
                     <th className="py-3 px-3 font-medium">วิธีเช็คชื่อ</th>
                     <th className="py-3 px-5 font-medium">รายละเอียด</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {pageRecords.map((r, i) => {
+                  {(loading || error || pageRecords.length === 0) && (
+                    <tr>
+                      <td colSpan={7} className={`py-8 text-center text-sm ${error ? "text-red-500" : "text-slate-400"}`}>
+                        {error || (loading ? "กำลังโหลด..." : "ไม่พบประวัติการเช็คชื่อ")}
+                      </td>
+                    </tr>
+                  )}
+                  {pageRecords.map((r) => {
                     const meta = statusMeta[r.status];
                     const StatusIcon = meta.icon;
                     return (
-                      <tr key={i} className="border-b border-slate-50 last:border-0 hover:bg-slate-50/60">
-                        <td className="py-4 px-5 text-slate-600 whitespace-nowrap">{r.date}</td>
-                        <td className="py-4 px-3 text-slate-600 whitespace-nowrap">{r.time}</td>
-                        <td className="py-4 px-3 whitespace-nowrap">
-                          <div className="font-semibold text-slate-800">{r.code}</div>
-                          <div className="text-xs text-slate-400">{courses[r.code]}</div>
+                      <tr key={r.session_id} className="border-b border-slate-50 last:border-0 hover:bg-slate-50/60">
+                        <td className="py-4 px-5 text-slate-600 whitespace-nowrap">{thaiDate(r.session_date)}</td>
+                        <td className="py-4 px-3 text-slate-600 whitespace-nowrap">
+                          {r.my_check_in_time ? hhmm(r.my_check_in_time) : "-"}
                         </td>
-                        <td className="py-4 px-3 text-slate-600 whitespace-nowrap">{r.room}</td>
+                        <td className="py-4 px-3 whitespace-nowrap">
+                          <div className="font-semibold text-slate-800">{r.course_code}</div>
+                          <div className="text-xs text-slate-400">{r.course_name}</div>
+                        </td>
+                        <td className="py-4 px-3 text-slate-600 whitespace-nowrap">{r.class_code || "-"}</td>
                         <td className="py-4 px-3 whitespace-nowrap">
                           <span
                             className={`inline-flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-full ${meta.cls}`}
@@ -325,16 +349,16 @@ export default function CheckinHistory() {
                           </span>
                         </td>
                         <td className="py-4 px-3 whitespace-nowrap">
-                          <span className="inline-flex items-center gap-1.5 text-slate-500 text-xs">
-                            <ScanFace className="w-4 h-4 text-blue-500" />
-                            สแกนใบหน้า
-                          </span>
+                          {r.my_method ? (
+                            <span className="inline-flex items-center gap-1.5 text-slate-500 text-xs">
+                              <ScanFace className="w-4 h-4 text-blue-500" />
+                              {r.my_method === "face" ? "สแกนใบหน้า" : "อาจารย์บันทึก"}
+                            </span>
+                          ) : (
+                            <span className="text-xs text-slate-400">-</span>
+                          )}
                         </td>
-                        <td className="py-4 px-5 whitespace-nowrap">
-                          <a href="#" className="text-blue-600 text-xs font-semibold hover:underline">
-                            ดูรายละเอียด
-                          </a>
-                        </td>
+                        <td className="py-4 px-5 whitespace-nowrap text-xs text-slate-500">{detailOf(r)}</td>
                       </tr>
                     );
                   })}
@@ -345,13 +369,13 @@ export default function CheckinHistory() {
             {/* Pagination */}
             <div className="flex flex-col sm:flex-row items-center justify-between gap-3 px-5 py-4">
               <div className="text-xs text-slate-400">
-                แสดง {start + 1} - {Math.min(start + PAGE_SIZE, totalRecords)} จาก {totalRecords}{" "}
+                แสดง {totalRecords ? start + 1 : 0} - {Math.min(start + PAGE_SIZE, totalRecords)} จาก {totalRecords}{" "}
                 รายการ
               </div>
               <div className="flex items-center gap-1.5">
                 <button
-                  onClick={() => setPage((p) => Math.max(1, p - 1))}
-                  disabled={page === 1}
+                  onClick={() => setPage(Math.max(1, currentPage - 1))}
+                  disabled={currentPage === 1}
                   className="w-8 h-8 flex items-center justify-center rounded-lg border border-slate-200 text-slate-400 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
                 >
                   <ChevronLeft className="w-4 h-4" />
@@ -361,7 +385,7 @@ export default function CheckinHistory() {
                     key={i}
                     onClick={() => setPage(i + 1)}
                     className={`w-8 h-8 flex items-center justify-center rounded-lg text-sm font-medium transition-colors ${
-                      page === i + 1
+                      currentPage === i + 1
                         ? "bg-blue-600 text-white"
                         : "border border-slate-200 text-slate-500 hover:bg-slate-50"
                     }`}
@@ -370,8 +394,8 @@ export default function CheckinHistory() {
                   </button>
                 ))}
                 <button
-                  onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-                  disabled={page === totalPages}
+                  onClick={() => setPage(Math.min(totalPages, currentPage + 1))}
+                  disabled={currentPage === totalPages}
                   className="w-8 h-8 flex items-center justify-center rounded-lg border border-slate-200 text-slate-400 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
                 >
                   <ChevronRight className="w-4 h-4" />

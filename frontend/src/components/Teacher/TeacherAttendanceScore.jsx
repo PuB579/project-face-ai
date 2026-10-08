@@ -27,33 +27,14 @@ import {
   Cell,
 } from "recharts";
 import TeacherLayout from "./TeacherLayout";
+import LoadState from "../LoadState";
 import { useAppearanceSettings } from "./useAppearanceSettings";
+import { useTeacherData } from "./useTeacherData";
+import { api } from "../../lib/api";
+import { useApi } from "../../lib/useApi";
+import { downloadBlob, groupBy, printTable, toExcel } from "../../lib/format";
 
-const courseOptions = [
-  { code: "CS-201", name: "โครงสร้างข้อมูล (Data Structures)" },
-  { code: "CS-202", name: "การเขียนโปรแกรมเชิงวัตถุ (OOP)" },
-  { code: "CS-203", name: "ฐานข้อมูล (Database Systems)" },
-  { code: "CS-204", name: "ปัญญาประดิษฐ์เบื้องต้น (AI Intro)" },
-  { code: "CS-205", name: "ระบบปฏิบัติการ (Operating Systems)" },
-];
-
-// จำนวนครั้งเช็คชื่อของข้อมูลตัวอย่าง (ใช้เป็นค่าเริ่มต้นของ "จำนวนครั้งเช็คชื่อทั้งหมด" ในแต่ละวิชา — ปรับได้ทีหลัง)
-const sampleSessionCount = 16;
-
-// lateRecords = นาทีที่มาสายของแต่ละครั้งที่มาสาย (ใช้คำนวณกับเงื่อนไขแบบขั้นบันได)
-const baseStudents = [
-  { code: "65011001", name: "นายธนภัทร ใจดี", year: 3, present: 14, lateRecords: [7], absent: 1, note: "" },
-  { code: "65011002", name: "นางสาวกานต์ธิชา สุขสวัสดิ์", year: 3, present: 16, lateRecords: [], absent: 0, note: "" },
-  { code: "65011003", name: "นายศุภกฤต เสริมศรี", year: 3, present: 13, lateRecords: [12, 4], absent: 1, note: "" },
-  { code: "65011004", name: "นางสาวพิมพ์ชนก วงศ์สมบัติ", year: 3, present: 10, lateRecords: [15, 20, 6], absent: 3, note: "" },
-  { code: "65011005", name: "นายกิตติพงษ์ แสงทอง", year: 2, present: 15, lateRecords: [3], absent: 0, note: "" },
-  { code: "65011006", name: "นางสาววรินทร์พร แก้วใส", year: 2, present: 8, lateRecords: [8, 25], absent: 6, note: "รอเอกสารใบรับรองแพทย์" },
-  { code: "65011007", name: "นายภูมิพัฒน์ สายเนตร", year: 1, present: 14, lateRecords: [], absent: 2, note: "" },
-  { code: "65011008", name: "นางสาวภัทรวดี กันหา", year: 1, present: 16, lateRecords: [], absent: 0, note: "" },
-  { code: "65011009", name: "นายณัฐวุฒิ จันทร์ศรี", year: 4, present: 12, lateRecords: [10, 5], absent: 2, note: "" },
-  { code: "65011010", name: "นางสาวอรปรียา ทองมาก", year: 4, present: 15, lateRecords: [], absent: 1, note: "" },
-];
-
+const DEFAULT_SESSION_COUNT = 16;
 // เงื่อนไขเริ่มต้น: มาสายตั้งแต่ 5 นาที หัก 1 คะแนน, ตั้งแต่ 10 นาที หัก 2 คะแนน, ตั้งแต่ 20 นาที หัก 3 คะแนน
 // (ครูปรับ/เพิ่ม/ลบเงื่อนไขได้อิสระ แยกเป็นรายวิชา)
 function defaultLateTiers() {
@@ -66,23 +47,15 @@ function defaultLateTiers() {
 
 // mode "direct"     = กำหนดคะแนนเต็มรวมโดยตรง (เช่น เต็ม 10) แล้วหักคะแนนตรงในสเกลนี้เลย
 // mode "perSession"  = กำหนดคะแนนเต็มต่อครั้ง (เช่น ครั้งละ 10 × 20 ครั้ง = ดิบ 200) แล้วแปลงสัดส่วนกลับมาเป็นคะแนนเต็มที่ใช้เข้าเกรด
-function defaultRule() {
+function defaultRule(sessionCount = DEFAULT_SESSION_COUNT) {
   return {
     mode: "direct",
     full: 10,
-    sessionCount: sampleSessionCount,
+    sessionCount,
     sessionFull: 10,
     passThreshold: 5,
     lateTiers: defaultLateTiers(),
   };
-}
-
-function makeInitialRuleByCourse() {
-  const map = {};
-  courseOptions.forEach((c) => {
-    map[c.code] = defaultRule();
-  });
-  return map;
 }
 
 // หาขั้นที่ตรงกับจำนวนนาทีที่สาย (ใช้ threshold สูงสุดที่ <= นาทีที่สาย)
@@ -125,114 +98,198 @@ function computeScore(student, rule) {
   return rule.mode === "perSession" ? computeScorePerSession(student, rule) : computeScoreDirect(student, rule);
 }
 
-function makeInitialScoresByCourse(ruleByCourse) {
-  const map = {};
-  courseOptions.forEach((c) => {
-    map[c.code] = baseStudents.map((s) => ({ code: s.code, score: computeScore(s, ruleByCourse[c.code]), note: s.note || "" }));
-  });
-  return map;
-}
-
 let tierIdCounter = 100;
 
 export default function TeacherAttendanceScore() {
   const { t } = useAppearanceSettings();
-  const [course, setCourse] = useState(courseOptions[0]);
-  const [ruleByCourse, setRuleByCourse] = useState(makeInitialRuleByCourse);
-  const [scoresByCourse, setScoresByCourse] = useState(() => makeInitialScoresByCourse(makeInitialRuleByCourse()));
+  const { classes, records, loading, error, reload } = useTeacherData();
+  const [pickedClassId, setPickedClassId] = useState(null);
+  const classId = pickedClassId ?? classes[0]?.id ?? null;
+  const cls = classes.find((c) => c.id === classId);
+  const course = { code: cls?.course_code || "-", name: cls?.course_name || "" };
+
+  const ruleReq = useApi(classId ? `/scores/rules/${classId}` : null);
+  const savedReq = useApi(classId ? `/scores/class/${classId}` : null, []);
+  const rosterReq = useApi(classId ? `/classes/${classId}/students` : null, []);
+  const [ruleEdits, setRuleEdits] = useState({}); // classId -> rule ที่แก้ไว้แต่ยังไม่บันทึก
+  const [scoreEdits, setScoreEdits] = useState({}); // classId -> { studentId: { score, note } }
   const [savedAt, setSavedAt] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState("");
+  const [search, setSearch] = useState("");
 
-  const rule = ruleByCourse[course.code];
+  const classRecords = useMemo(
+    () => records.filter((r) => r.class_id === classId && ["present", "late", "absent"].includes(r.status)),
+    [records, classId]
+  );
+  const sessionCount = new Set(records.filter((r) => r.class_id === classId).map((r) => r.session_id)).size;
 
-  const students = useMemo(() => {
-    const scoreMap = new Map(scoresByCourse[course.code].map((s) => [s.code, s]));
-    return baseStudents.map((s) => ({ ...s, ...scoreMap.get(s.code) }));
-  }, [course, scoresByCourse]);
+  const serverRule = ruleReq.data && ruleReq.data.class_id === classId ? ruleReq.data : null;
+  const rule =
+    ruleEdits[classId] ||
+    (serverRule
+      ? {
+          mode: serverRule.mode === "per_session" ? "perSession" : "direct",
+          full: Number(serverRule.full_score),
+          sessionCount: serverRule.session_count,
+          sessionFull: Number(serverRule.session_full_score),
+          passThreshold: Number(serverRule.pass_threshold),
+          lateTiers: serverRule.late_tiers.map((tier) => ({
+            id: `tier-${tier.id}`,
+            minMinutes: tier.min_minutes,
+            deduction: Number(tier.deduction),
+          })),
+        }
+      : defaultRule(Math.max(sessionCount, DEFAULT_SESSION_COUNT)));
+
+  const setRule = (patch) => setRuleEdits((prev) => ({ ...prev, [classId]: { ...rule, ...patch } }));
+
+  // สถิติของนักศึกษาแต่ละคนในคลาส (รวมคนที่ยังไม่มีคาบเรียนเลย)
+  const baseStudents = useMemo(() => {
+    const byStudent = groupBy(classRecords, (r) => r.student_id);
+    const roster = (rosterReq.data || []).filter((e) => e.class_id === classId && e.student);
+    return roster.map((e) => {
+      const rows = byStudent.get(e.student_id) || [];
+      return {
+        id: e.student_id,
+        code: e.student.student_code,
+        name: e.student.full_name,
+        present: rows.filter((r) => r.status === "present").length,
+        lateRecords: rows.filter((r) => r.status === "late").map((r) => r.late_minutes || 0),
+        absent: rows.filter((r) => r.status === "absent").length,
+      };
+    });
+  }, [classRecords, rosterReq.data, classId]);
+
+  const savedById = useMemo(() => {
+    const rows = (savedReq.data || []).filter((s) => s.class_id === classId);
+    return new Map(rows.map((s) => [s.student_id, s]));
+  }, [savedReq.data, classId]);
+
+  const allStudents = baseStudents.map((s) => {
+    const edit = scoreEdits[classId]?.[s.id];
+    const saved = savedById.get(s.id);
+    const computed = computeScore(s, rule);
+    return {
+      ...s,
+      computed,
+      score: edit?.score ?? (saved?.is_manual_override ? Number(saved.score) : computed),
+      note: edit?.note ?? saved?.note ?? "",
+    };
+  });
+  const q = search.trim().toLowerCase();
+  const students = q ? allStudents.filter((s) => `${s.code} ${s.name}`.toLowerCase().includes(q)) : allStudents;
 
   const handleRuleField = (field, value) => {
     const num = value === "" ? 0 : parseFloat(value);
-    setRuleByCourse((prev) => ({
-      ...prev,
-      [course.code]: { ...prev[course.code], [field]: Number.isNaN(num) ? prev[course.code][field] : num },
-    }));
+    if (!Number.isNaN(num)) setRule({ [field]: num });
   };
 
-  const handleModeChange = (mode) => {
-    setRuleByCourse((prev) => ({ ...prev, [course.code]: { ...prev[course.code], mode } }));
-  };
+  const handleModeChange = (mode) => setRule({ mode });
 
   const handleTierField = (tierId, field, value) => {
     const num = value === "" ? 0 : parseFloat(value);
-    setRuleByCourse((prev) => ({
-      ...prev,
-      [course.code]: {
-        ...prev[course.code],
-        lateTiers: prev[course.code].lateTiers.map((t) => (t.id === tierId ? { ...t, [field]: Number.isNaN(num) ? t[field] : num } : t)),
-      },
-    }));
+    if (Number.isNaN(num)) return;
+    setRule({ lateTiers: rule.lateTiers.map((tier) => (tier.id === tierId ? { ...tier, [field]: num } : tier)) });
   };
 
   const addTier = () => {
     tierIdCounter += 1;
-    setRuleByCourse((prev) => ({
-      ...prev,
-      [course.code]: {
-        ...prev[course.code],
-        lateTiers: [...prev[course.code].lateTiers, { id: `tier-${tierIdCounter}`, minMinutes: 5, deduction: 1 }],
-      },
-    }));
+    setRule({ lateTiers: [...rule.lateTiers, { id: `tier-${tierIdCounter}`, minMinutes: 5, deduction: 1 }] });
   };
 
-  const removeTier = (tierId) => {
-    setRuleByCourse((prev) => ({
-      ...prev,
-      [course.code]: { ...prev[course.code], lateTiers: prev[course.code].lateTiers.filter((t) => t.id !== tierId) },
-    }));
+  const removeTier = (tierId) => setRule({ lateTiers: rule.lateTiers.filter((tier) => tier.id !== tierId) });
+
+  const editStudent = (id, patch) => {
+    setScoreEdits((prev) => {
+      const current = allStudents.find((s) => s.id === id);
+      const forClass = prev[classId] || {};
+      return {
+        ...prev,
+        [classId]: { ...forClass, [id]: { score: current.score, note: current.note, ...forClass[id], ...patch } },
+      };
+    });
+    setSavedAt(null);
   };
 
+  // คำนวณใหม่ทุกคนตามเกณฑ์ปัจจุบัน (คงหมายเหตุไว้)
   const recalcAll = () => {
-    setScoresByCourse((prev) => ({
+    setScoreEdits((prev) => ({
       ...prev,
-      [course.code]: baseStudents.map((s) => ({
-        code: s.code,
-        score: computeScore(s, rule),
-        note: prev[course.code].find((x) => x.code === s.code)?.note || "",
-      })),
+      [classId]: Object.fromEntries(allStudents.map((s) => [s.id, { score: s.computed, note: s.note }])),
     }));
     setSavedAt(null);
   };
 
-  const handleScoreChange = (code, value) => {
+  const handleScoreChange = (id, value) => {
     const num = value === "" ? 0 : parseFloat(value);
-    setScoresByCourse((prev) => ({
-      ...prev,
-      [course.code]: prev[course.code].map((s) => (s.code === code ? { ...s, score: Number.isNaN(num) ? s.score : num } : s)),
-    }));
-    setSavedAt(null);
+    if (!Number.isNaN(num)) editStudent(id, { score: num });
   };
 
-  const handleNoteChange = (code, value) => {
-    setScoresByCourse((prev) => ({
-      ...prev,
-      [course.code]: prev[course.code].map((s) => (s.code === code ? { ...s, note: value } : s)),
-    }));
+  const handleNoteChange = (id, value) => editStudent(id, { note: value });
+
+  const handleSaveAll = async () => {
+    if (!classId) return;
+    setSaving(true);
+    setSaveError("");
+    try {
+      await api(`/scores/rules/${classId}`, {
+        method: "PUT",
+        body: {
+          class_id: classId,
+          mode: rule.mode === "perSession" ? "per_session" : "direct",
+          full_score: rule.full,
+          session_count: rule.sessionCount,
+          session_full_score: rule.sessionFull,
+          pass_threshold: rule.passThreshold,
+          late_tiers: rule.lateTiers.map((tier) => ({ min_minutes: tier.minMinutes, deduction: tier.deduction })),
+        },
+      });
+      // คะแนนที่ไม่ตรงกับสูตร = อาจารย์แก้เอง (manual) ระบบจะไม่คำนวณทับ
+      await Promise.all(
+        allStudents.map((s) =>
+          api(`/scores/class/${classId}/student/${s.id}`, {
+            method: "PUT",
+            body: { score: s.score, note: s.note || null, manual: Math.abs(s.score - s.computed) > 0.005 },
+          })
+        )
+      );
+      setRuleEdits((prev) => ({ ...prev, [classId]: undefined }));
+      setScoreEdits((prev) => ({ ...prev, [classId]: undefined }));
+      ruleReq.reload();
+      savedReq.reload();
+      setSavedAt(new Date().toLocaleTimeString("th-TH", { hour: "2-digit", minute: "2-digit" }));
+    } catch (err) {
+      setSaveError(err.message);
+    } finally {
+      setSaving(false);
+    }
   };
 
-  const handleSaveAll = () => {
-    setSavedAt(new Date().toLocaleTimeString("th-TH", { hour: "2-digit", minute: "2-digit" }));
+  const exportHeaders = ["รหัสนักศึกษา", "ชื่อ-นามสกุล", "เข้าเรียน", "มาสาย", "ขาดเรียน", `คะแนน (เต็ม ${rule.full})`, "หมายเหตุ"];
+  const exportRows = () =>
+    allStudents.map((s) => [s.code, s.name, s.present, s.lateRecords.length, s.absent, s.score, s.note]);
+  const exportTitle = `คะแนนเข้าเรียน ${course.code} ${course.name}`;
+  const exportExcel = () => downloadBlob(`คะแนนเข้าเรียน_${course.code}.xls`, toExcel(exportTitle, exportHeaders, exportRows()));
+  const exportPdf = () => {
+    try {
+      printTable(exportTitle, exportHeaders, exportRows());
+    } catch (err) {
+      setSaveError(err.message);
+    }
   };
 
-  const sortedTiers = useMemo(() => [...rule.lateTiers].sort((a, b) => a.minMinutes - b.minMinutes), [rule.lateTiers]);
+  const sortedTiers = [...rule.lateTiers].sort((a, b) => a.minMinutes - b.minMinutes);
 
-  const stats = useMemo(() => {
+  const stats = (() => {
     const total = students.length;
     const avg = total ? students.reduce((sum, s) => sum + s.score, 0) / total : 0;
     const fullCount = students.filter((s) => s.score >= rule.full).length;
     const lowCount = students.filter((s) => s.score < rule.passThreshold).length;
     return { total, avg, fullCount, lowCount };
-  }, [students, rule]);
+  })();
 
-  const distribution = useMemo(() => {
+  const distribution = (() => {
     const buckets = [
       { key: "90-100", label: "90-100%", color: "#22c55e", count: 0 },
       { key: "70-89", label: "70-89%", color: "#3b82f6", count: 0 },
@@ -247,7 +304,7 @@ export default function TeacherAttendanceScore() {
       else buckets[3].count += 1;
     });
     return buckets;
-  }, [students, rule, t]);
+  })();
 
   return (
     <TeacherLayout
@@ -257,13 +314,13 @@ export default function TeacherAttendanceScore() {
       headerExtra={
         <div className="relative hidden sm:block shrink-0">
           <select
-            value={course.code}
-            onChange={(e) => setCourse(courseOptions.find((c) => c.code === e.target.value) || courseOptions[0])}
+            value={classId ?? ""}
+            onChange={(e) => setPickedClassId(Number(e.target.value))}
             className="appearance-none border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 rounded-xl pl-4 pr-9 py-2.5 text-sm text-slate-600 dark:text-slate-300 font-medium hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors focus:outline-none focus:ring-2 focus:ring-blue-200 dark:focus:ring-blue-900 cursor-pointer"
           >
-            {courseOptions.map((c) => (
-              <option key={c.code} value={c.code}>
-                {c.code} — {c.name}
+            {classes.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.course_code} — {c.course_name}
               </option>
             ))}
           </select>
@@ -272,15 +329,20 @@ export default function TeacherAttendanceScore() {
       }
     >
       {/* Mobile course select */}
+      <LoadState
+        loading={loading || ruleReq.loading}
+        error={error || ruleReq.error || savedReq.error || rosterReq.error || saveError}
+        onRetry={reload}
+      />
       <div className="sm:hidden">
         <select
-          value={course.code}
-          onChange={(e) => setCourse(courseOptions.find((c) => c.code === e.target.value) || courseOptions[0])}
+          value={classId ?? ""}
+          onChange={(e) => setPickedClassId(Number(e.target.value))}
           className="w-full border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 rounded-xl px-4 py-2.5 text-sm text-slate-600 dark:text-slate-300 font-medium focus:outline-none focus:ring-2 focus:ring-blue-200 dark:focus:ring-blue-900"
         >
-          {courseOptions.map((c) => (
-            <option key={c.code} value={c.code}>
-              {c.code} — {c.name}
+          {classes.map((c) => (
+            <option key={c.id} value={c.id}>
+              {c.course_code} — {c.course_name}
             </option>
           ))}
         </select>
@@ -503,6 +565,8 @@ export default function TeacherAttendanceScore() {
               <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 dark:text-slate-500" />
               <input
                 type="text"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
                 placeholder={t("scores.searchPlaceholder")}
                 className="w-full pl-10 pr-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-sm text-slate-700 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-200 dark:focus:ring-blue-900"
               />
@@ -510,14 +574,14 @@ export default function TeacherAttendanceScore() {
             <p className="text-xs text-slate-400 dark:text-slate-500 leading-relaxed">{t("scores.editHint")}</p>
           </div>
           <div className="flex flex-wrap items-center gap-2 mt-4">
-            <button className="flex items-center gap-2 border border-slate-200 dark:border-slate-700 rounded-xl px-4 py-2 text-sm text-slate-500 dark:text-slate-400 font-medium hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors">
+            <button onClick={() => setSearch("")} className="flex items-center gap-2 border border-slate-200 dark:border-slate-700 rounded-xl px-4 py-2 text-sm text-slate-500 dark:text-slate-400 font-medium hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors">
               <RotateCcw className="w-4 h-4" />
               {t("common.actions.reset")}
             </button>
-            <button className="flex items-center gap-2 bg-emerald-500 hover:bg-emerald-600 transition-colors text-white text-sm font-semibold px-4 py-2 rounded-xl shadow-sm shadow-emerald-100 dark:shadow-emerald-950">
+            <button onClick={exportExcel} className="flex items-center gap-2 bg-emerald-500 hover:bg-emerald-600 transition-colors text-white text-sm font-semibold px-4 py-2 rounded-xl shadow-sm shadow-emerald-100 dark:shadow-emerald-950">
               {t("common.actions.exportExcel")}
             </button>
-            <button className="flex items-center gap-2 bg-red-500 hover:bg-red-600 transition-colors text-white text-sm font-semibold px-4 py-2 rounded-xl shadow-sm shadow-red-100 dark:shadow-red-950">
+            <button onClick={exportPdf} className="flex items-center gap-2 bg-red-500 hover:bg-red-600 transition-colors text-white text-sm font-semibold px-4 py-2 rounded-xl shadow-sm shadow-red-100 dark:shadow-red-950">
               {t("common.actions.exportPdf")}
             </button>
           </div>
@@ -563,14 +627,10 @@ export default function TeacherAttendanceScore() {
                 ? s.lateRecords.map((m) => `${t("common.status.late")} ${m} ${t("common.units.minutes")}`).join(", ")
                 : t("scores.noConditions");
               return (
-                <tr key={s.code} className="border-b border-slate-50 dark:border-slate-800/60 last:border-0">
+                <tr key={s.id} className="border-b border-slate-50 dark:border-slate-800/60 last:border-0">
                   <td className="py-3 pr-3 text-slate-500 dark:text-slate-400 whitespace-nowrap">{s.code}</td>
                   <td className="py-3 pr-3 text-slate-800 dark:text-slate-100 font-medium whitespace-nowrap">
                     {s.name}
-                    <span className="text-slate-400 dark:text-slate-500 font-normal">
-                      {" "}
-                      · {t("scores.yearPrefix")} {s.year}
-                    </span>
                   </td>
                   <td className="py-3 pr-3 text-emerald-600 dark:text-emerald-400 font-medium text-center">{s.present}</td>
                   <td className="py-3 pr-3 text-amber-500 dark:text-amber-400 font-medium text-center cursor-help" title={lateTitle}>
@@ -585,7 +645,7 @@ export default function TeacherAttendanceScore() {
                         min="0"
                         max={rule.full}
                         value={s.score}
-                        onChange={(e) => handleScoreChange(s.code, e.target.value)}
+                        onChange={(e) => handleScoreChange(s.id, e.target.value)}
                         className="w-16 text-sm font-semibold text-slate-800 dark:text-slate-100 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-200 dark:focus:ring-blue-900"
                       />
                       <span className="text-xs text-slate-400 dark:text-slate-500">/ {rule.full}</span>
@@ -615,7 +675,7 @@ export default function TeacherAttendanceScore() {
                     <input
                       type="text"
                       value={s.note}
-                      onChange={(e) => handleNoteChange(s.code, e.target.value)}
+                      onChange={(e) => handleNoteChange(s.id, e.target.value)}
                       placeholder={t("scores.notePlaceholder")}
                       className="w-full text-xs text-slate-600 dark:text-slate-300 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-2.5 py-1.5 placeholder:text-slate-300 dark:placeholder:text-slate-600 focus:outline-none focus:ring-2 focus:ring-blue-200 dark:focus:ring-blue-900"
                     />
@@ -630,7 +690,8 @@ export default function TeacherAttendanceScore() {
           <p className="text-xs text-slate-400 dark:text-slate-500">{t("scores.bottomHint")}</p>
           <button
             onClick={handleSaveAll}
-            className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 transition-colors text-white text-sm font-semibold px-5 py-2.5 rounded-xl shadow-sm shadow-blue-200 dark:shadow-blue-950"
+            disabled={saving || !classId}
+            className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-60 transition-colors text-white text-sm font-semibold px-5 py-2.5 rounded-xl shadow-sm shadow-blue-200 dark:shadow-blue-950"
           >
             <Save className="w-4 h-4" />
             {t("scores.saveAllScores")}

@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import { useState } from "react";
 import { Link } from "react-router-dom";
 import {
   Home,
@@ -18,7 +18,6 @@ import {
   ChevronRight,
   ShieldCheck,
   Pencil,
-  Camera,
   Mail,
   Phone,
   Building2,
@@ -29,6 +28,16 @@ import {
   Lock,
 } from "lucide-react";
 import logoImg from "../../assets/logo-cs.png";
+import { api, getUser } from "../../lib/api";
+import { useApi } from "../../lib/useApi";
+import { countStatus, initial, isoDate, thaiDate } from "../../lib/format";
+
+const FACE_BADGE = {
+  approved: { text: "ลงทะเบียนแล้ว", desc: "ใบหน้าของคุณได้รับการอนุมัติแล้ว", cls: "bg-emerald-100 text-emerald-600" },
+  pending: { text: "รออนุมัติ", desc: "ส่งรูปใบหน้าแล้ว กำลังรออาจารย์อนุมัติ", cls: "bg-amber-100 text-amber-600" },
+  rejected: { text: "ถูกปฏิเสธ", desc: "รูปใบหน้าถูกปฏิเสธ กรุณาลงทะเบียนใหม่", cls: "bg-red-100 text-red-600" },
+  none: { text: "ยังไม่ลงทะเบียน", desc: "คุณยังไม่ได้ลงทะเบียนใบหน้า", cls: "bg-slate-100 text-slate-500" },
+};
 
 const navItems = [
   { icon: Home, label: "หน้าหลัก", to: "/dashboard" },
@@ -42,22 +51,44 @@ const navItems = [
   { icon: Settings, label: "ตั้งค่า", to: "/settings" },
 ];
 
-const personalInfo = [
-  { label: "ชื่อ-นามสกุล", value: "นายกฤษฎา ใจดี" },
-  { label: "ชื่อเล่น", value: "กฤษฎา" },
-  { label: "รหัสนักศึกษา", value: "6601234567" },
-  { label: "Email", value: "kritsada@example.com" },
-  { label: "เบอร์โทรศัพท์", value: "081-234-5678" },
-  { label: "คณะ", value: "คณะวิทยาการคอมพิวเตอร์" },
-  { label: "สาขาวิชา", value: "วิทยาการคอมพิวเตอร์" },
-  { label: "ชั้นปี", value: "ปีที่ 3" },
-  { label: "กลุ่มเรียน", value: "CS3/1" },
-  { label: "ที่อยู่", value: "123 หมู่ 5 ต.สันทรายน้อย อ.สันทราย จ.เชียงใหม่ 50210" },
-];
-
 export default function Profile() {
+  const user = getUser();
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [today] = useState(() => isoDate());
+  const meReq = useApi("/students/me");
+  const sessionsReq = useApi(`/attendance/my-sessions?start=2000-01-01&end=${today}`, []);
+  const me = meReq.data;
+  const stats = countStatus(sessionsReq.data || []);
+  const face = FACE_BADGE[me?.face_status || "none"];
+  const [editingPhone, setEditingPhone] = useState(false);
+  const [phone, setPhone] = useState("");
+  const [saveMsg, setSaveMsg] = useState({ tone: "", text: "" });
 
+  const startEdit = () => {
+    setPhone(me?.phone || "");
+    setSaveMsg({ tone: "", text: "" });
+    setEditingPhone(true);
+  };
+
+  const savePhone = async () => {
+    try {
+      await api("/students/me", { method: "PUT", body: { phone: phone.trim() || null } });
+      setEditingPhone(false);
+      setSaveMsg({ tone: "success", text: "บันทึกเบอร์โทรศัพท์แล้ว" });
+      meReq.reload();
+    } catch (err) {
+      setSaveMsg({ tone: "error", text: err.message });
+    }
+  };
+
+  const personalInfo = [
+    { label: "ชื่อ-นามสกุล", value: me?.full_name },
+    { label: "รหัสนักศึกษา", value: me?.student_code },
+    { label: "Email", value: me?.email },
+    { label: "เบอร์โทรศัพท์", value: me?.phone, editable: true },
+    { label: "คณะ", value: me?.faculty },
+    { label: "สาขาวิชา", value: me?.major },
+  ];
   return (
     <div className="min-h-screen w-full bg-slate-50 font-sans flex">
       {/* ---------- Sidebar ---------- */}
@@ -153,20 +184,15 @@ export default function Profile() {
 
           <button className="relative w-10 h-10 flex items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100 transition-colors shrink-0">
             <Bell className="w-5 h-5" />
-            <span className="absolute top-1.5 right-1.5 w-4 h-4 rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center">
-              3
-            </span>
           </button>
 
           <button className="flex items-center gap-2.5 pl-2 shrink-0">
-            <img
-              src="https://images.unsplash.com/photo-1633332755192-727a05c4013d?w=100&h=100&fit=crop&crop=faces"
-              alt="นายกฤษฎา ใจดี"
-              className="w-10 h-10 rounded-full object-cover"
-            />
+            <div className="w-10 h-10 rounded-full bg-blue-600 text-white flex items-center justify-center text-sm font-bold">
+              {initial(user?.full_name)}
+            </div>
             <div className="text-left hidden sm:block">
               <div className="text-sm font-semibold text-slate-800 whitespace-nowrap">
-                นายกฤษฎา ใจดี
+                {user?.full_name || "-"}
               </div>
               <div className="text-xs text-slate-400 whitespace-nowrap">นักศึกษา</div>
             </div>
@@ -191,62 +217,69 @@ export default function Profile() {
             {/* Left: avatar card */}
             <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-6">
               <div className="flex flex-col items-center text-center">
-                <div className="relative mb-4">
-                  <img
-                    src="https://images.unsplash.com/photo-1633332755192-727a05c4013d?w=200&h=200&fit=crop&crop=faces"
-                    alt="นายกฤษฎา ใจดี"
-                    className="w-28 h-28 rounded-full object-cover ring-4 ring-blue-50"
-                  />
-                  <button className="absolute bottom-0 right-0 w-9 h-9 rounded-full bg-blue-600 hover:bg-blue-700 transition-colors flex items-center justify-center ring-4 ring-white">
-                    <Camera className="w-4 h-4 text-white" />
-                  </button>
+                <div className="mb-4 w-28 h-28 rounded-full bg-blue-600 text-white text-4xl font-bold flex items-center justify-center ring-4 ring-blue-50">
+                  {initial(me?.full_name || user?.full_name)}
                 </div>
-                <div className="text-lg font-bold text-slate-900">นายกฤษฎา ใจดี</div>
+                <div className="text-lg font-bold text-slate-900">{me?.full_name || user?.full_name}</div>
                 <div className="text-sm text-slate-400 mb-3">นักศึกษา</div>
                 <span className="inline-block bg-blue-50 text-blue-600 text-xs font-semibold px-3 py-1.5 rounded-full mb-5">
-                  รหัสนักศึกษา 6601234567
+                  รหัสนักศึกษา {me?.student_code || "-"}
                 </span>
+                {meReq.error && <p className="text-sm text-red-500 mb-3">{meReq.error}</p>}
               </div>
 
               <div className="space-y-3 text-sm border-t border-slate-100 pt-5">
                 <div className="flex items-center gap-3">
                   <Mail className="w-4 h-4 text-slate-400 shrink-0" />
-                  <span className="text-slate-600 truncate">kritsada@example.com</span>
+                  <span className="text-slate-600 truncate">{me?.email || "-"}</span>
                 </div>
                 <div className="flex items-center gap-3">
                   <Phone className="w-4 h-4 text-slate-400 shrink-0" />
-                  <span className="text-slate-600">081-234-5678</span>
+                  <span className="text-slate-600">{me?.phone || "-"}</span>
                 </div>
                 <div className="flex items-center gap-3">
                   <Building2 className="w-4 h-4 text-slate-400 shrink-0" />
-                  <span className="text-slate-600">คณะวิทยาการคอมพิวเตอร์</span>
+                  <span className="text-slate-600">{me?.faculty || "-"}</span>
                 </div>
                 <div className="flex items-center gap-3">
                   <GraduationCap className="w-4 h-4 text-slate-400 shrink-0" />
-                  <span className="text-slate-600">มหาวิทยาลัยเทคโนโลยี</span>
+                  <span className="text-slate-600">{me?.major || "-"}</span>
                 </div>
                 <div className="flex items-center gap-3">
                   <CalendarDays className="w-4 h-4 text-slate-400 shrink-0" />
-                  <span className="text-slate-600">เข้าระบบเมื่อ 12 มิถุนายน 2567</span>
+                  <span className="text-slate-600">
+                    สร้างบัญชีเมื่อ {me ? thaiDate(me.created_at, { day: "numeric", month: "long", year: "numeric" }) : "-"}
+                  </span>
                 </div>
               </div>
 
-              <button className="w-full flex items-center justify-center gap-2 mt-6 border border-blue-200 text-blue-600 text-sm font-semibold py-3 rounded-xl hover:bg-blue-50 transition-colors">
+              <button
+                onClick={startEdit}
+                className="w-full flex items-center justify-center gap-2 mt-6 border border-blue-200 text-blue-600 text-sm font-semibold py-3 rounded-xl hover:bg-blue-50 transition-colors"
+              >
                 <Pencil className="w-4 h-4" />
                 แก้ไขข้อมูลโปรไฟล์
               </button>
+              <p className="text-[11px] text-slate-400 mt-2 text-center">
+                แก้ไขได้เฉพาะเบอร์โทรศัพท์ ข้อมูลอื่นกรุณาติดต่ออาจารย์
+              </p>
             </div>
 
             {/* Right: personal info */}
             <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-6">
               <div className="flex items-center justify-between mb-5">
                 <h3 className="font-bold text-slate-900">ข้อมูลส่วนตัว</h3>
-                <button className="flex items-center gap-1.5 text-sm text-blue-600 font-medium hover:underline">
+                <button onClick={startEdit} className="flex items-center gap-1.5 text-sm text-blue-600 font-medium hover:underline">
                   <Pencil className="w-3.5 h-3.5" />
                   แก้ไข
                 </button>
               </div>
 
+              {saveMsg.text && (
+                <div className={`text-sm mb-3 ${saveMsg.tone === "success" ? "text-emerald-600" : "text-red-500"}`}>
+                  {saveMsg.text}
+                </div>
+              )}
               <div className="divide-y divide-slate-100">
                 {personalInfo.map((f) => (
                   <div
@@ -254,7 +287,23 @@ export default function Profile() {
                     className="flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-4 py-3"
                   >
                     <div className="text-sm text-slate-400 w-36 shrink-0">{f.label}</div>
-                    <div className="text-sm text-slate-800 font-medium">{f.value}</div>
+                    {f.editable && editingPhone ? (
+                      <div className="flex items-center gap-2">
+                        <input
+                          value={phone}
+                          onChange={(e) => setPhone(e.target.value)}
+                          className="border border-slate-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200"
+                        />
+                        <button onClick={savePhone} className="text-sm font-semibold text-white bg-blue-600 hover:bg-blue-700 px-3 py-1.5 rounded-lg">
+                          บันทึก
+                        </button>
+                        <button onClick={() => setEditingPhone(false)} className="text-sm text-slate-500 px-2 py-1.5">
+                          ยกเลิก
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="text-sm text-slate-800 font-medium">{f.value || "-"}</div>
+                    )}
                   </div>
                 ))}
               </div>
@@ -271,19 +320,19 @@ export default function Profile() {
                   icon={<CheckCircle2 className="w-5 h-5 text-emerald-600" />}
                   iconBg="bg-emerald-100"
                   label="อัตราการเข้าเรียนเฉลี่ย"
-                  value="94.2%"
+                  value={`${stats.rate.toFixed(1)}%`}
                 />
                 <InfoRow
                   icon={<CalendarCheck className="w-5 h-5 text-blue-600" />}
                   iconBg="bg-blue-100"
                   label="เช็คชื่อทั้งหมด"
-                  value="120 ครั้ง"
+                  value={`${stats.present + stats.late} ครั้ง`}
                 />
                 <InfoRow
                   icon={<BarChart3 className="w-5 h-5 text-amber-600" />}
                   iconBg="bg-amber-100"
                   label="ขาดเรียน"
-                  value="7 ครั้ง"
+                  value={`${stats.absent} ครั้ง`}
                 />
               </div>
             </div>
@@ -294,9 +343,9 @@ export default function Profile() {
               <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-6">
                 <div className="flex items-center justify-between mb-4">
                   <h3 className="font-bold text-slate-900">การลงทะเบียนใบหน้า</h3>
-                  <span className="inline-flex items-center gap-1 bg-emerald-100 text-emerald-600 text-xs font-semibold px-2.5 py-1 rounded-full">
+                  <span className={`inline-flex items-center gap-1 text-xs font-semibold px-2.5 py-1 rounded-full ${face.cls}`}>
                     <CheckCircle2 className="w-3.5 h-3.5" />
-                    ลงทะเบียนแล้ว
+                    {face.text}
                   </span>
                 </div>
 
@@ -308,12 +357,7 @@ export default function Profile() {
                     <div className="text-sm font-semibold text-slate-800">
                       สถานะการลงทะเบียน
                     </div>
-                    <div className="text-xs text-slate-500">
-                      ใบหน้าของคุณถูกลงทะเบียนแล้ว
-                    </div>
-                    <div className="text-xs text-slate-400 mt-0.5">
-                      ลงทะเบียนเมื่อ 12 มิถุนายน 2567 เวลา 14:30 น.
-                    </div>
+                    <div className="text-xs text-slate-500">{face.desc}</div>
                   </div>
                 </div>
 
@@ -322,14 +366,14 @@ export default function Profile() {
                   className="w-full flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 transition-colors text-white text-sm font-semibold py-3 rounded-xl"
                 >
                   <UserPlus className="w-4 h-4" />
-                  อัปเดตข้อมูลใบหน้า
+                  {me?.face_status === "none" ? "ลงทะเบียนใบหน้า" : "อัปเดตข้อมูลใบหน้า"}
                 </Link>
               </div>
 
               {/* Security */}
               <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-6">
                 <h3 className="font-bold text-slate-900 mb-4">ความปลอดภัย</h3>
-                <button className="w-full flex items-center gap-3 hover:bg-slate-50 rounded-xl px-2 py-2 transition-colors">
+                <Link to="/settings" className="w-full flex items-center gap-3 hover:bg-slate-50 rounded-xl px-2 py-2 transition-colors">
                   <div className="w-11 h-11 rounded-xl bg-slate-100 flex items-center justify-center shrink-0">
                     <Lock className="w-5 h-5 text-slate-500" />
                   </div>
@@ -340,7 +384,7 @@ export default function Profile() {
                     </div>
                   </div>
                   <ChevronRight className="w-4 h-4 text-slate-300 shrink-0" />
-                </button>
+                </Link>
               </div>
             </div>
           </div>
@@ -356,7 +400,7 @@ export default function Profile() {
 
 function InfoRow({ icon, iconBg, label, value }) {
   return (
-    <button className="w-full flex items-center gap-3 hover:bg-slate-50 rounded-xl px-2 py-2.5 transition-colors">
+    <Link to="/history" className="w-full flex items-center gap-3 hover:bg-slate-50 rounded-xl px-2 py-2.5 transition-colors">
       <div className={`w-11 h-11 rounded-xl flex items-center justify-center shrink-0 ${iconBg}`}>
         {icon}
       </div>
@@ -365,6 +409,6 @@ function InfoRow({ icon, iconBg, label, value }) {
         <div className="text-base font-bold text-slate-900">{value}</div>
       </div>
       <ChevronRight className="w-4 h-4 text-slate-300 shrink-0" />
-    </button>
+    </Link>
   );
 }

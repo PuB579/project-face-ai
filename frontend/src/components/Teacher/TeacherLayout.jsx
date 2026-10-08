@@ -15,9 +15,12 @@ import {
   ShieldCheck,
   CheckCircle2,
   Award,
+  Megaphone,
 } from "lucide-react";
 import logoImg from "../../assets/logo-cs.png";
 import { useAppearanceSettings } from "./useAppearanceSettings";
+import { getUser } from "../../lib/api";
+import { initial } from "../../lib/format";
 
 const navItems = [
   { icon: LayoutDashboard, labelKey: "nav.dashboard", to: "/teacher-dashboard" },
@@ -26,6 +29,7 @@ const navItems = [
   { icon: ClipboardList, labelKey: "nav.report", to: "/teacher-report" },
   { icon: Award, labelKey: "nav.scores", to: "/teacher-scores" },
   { icon: Users, labelKey: "nav.students", to: "/teacher-students" },
+  { icon: Megaphone, labelKey: "nav.announcements", to: "/teacher-announcements" },
   { icon: Download, labelKey: "nav.export", to: "/teacher-export" },
   { icon: User, labelKey: "nav.profile", to: "/teacher-profile" },
   { icon: SettingsIcon, labelKey: "nav.settings", to: "/teacher-settings" },
@@ -59,6 +63,7 @@ export default function TeacherLayout({
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const { t } = useAppearanceSettings();
   const location = useLocation();
+  const user = getUser();
 
   return (
     <div className="min-h-screen w-full bg-slate-50 dark:bg-slate-950 font-sans flex">
@@ -167,27 +172,22 @@ export default function TeacherLayout({
 
           <button className="relative w-10 h-10 flex items-center justify-center rounded-lg text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors shrink-0">
             <Bell className="w-5 h-5" />
-            <span className="absolute top-1.5 right-1.5 w-4 h-4 rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center">
-              3
-            </span>
           </button>
 
-          <button className="flex items-center gap-2.5 pl-2 shrink-0">
-            <img
-              src="https://images.unsplash.com/photo-1519085360753-af0119f7cbe7?w=100&h=100&fit=crop&crop=faces"
-              alt="อาจารย์ณัฐวุฒิ"
-              className="w-10 h-10 rounded-full object-cover"
-            />
+          <Link to="/teacher-profile" className="flex items-center gap-2.5 pl-2 shrink-0">
+            <div className="w-10 h-10 rounded-full bg-blue-600 text-white font-bold flex items-center justify-center">
+              {initial(user?.full_name)}
+            </div>
             <div className="text-left hidden sm:block">
               <div className="text-sm font-semibold text-slate-800 dark:text-slate-100 whitespace-nowrap">
-                อาจารย์ณัฐวุฒิ
+                {user?.full_name || "-"}
               </div>
               <div className="text-xs text-slate-400 dark:text-slate-500 whitespace-nowrap">
                 {t("role.teacher")}
               </div>
             </div>
             <ChevronDown className="w-4 h-4 text-slate-400 dark:text-slate-500 hidden sm:block" />
-          </button>
+          </Link>
         </header>
 
         {/* Body — เนื้อหาเฉพาะของแต่ละหน้า */}

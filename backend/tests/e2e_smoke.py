@@ -60,6 +60,23 @@ def check(name, method, path, expect, **kw):
     return body if ok else None
 
 
+def expect_check(name, actual, expected):
+    ok = actual == expected
+    results.append((ok, name))
+    print(f"[{'PASS' if ok else 'FAIL'}] {name}" + ("" if ok else f"  -> ได้ {actual!r} คาด {expected!r}"))
+
+
+def raw_status(path, token):
+    """status code ของ endpoint ที่ตอบเป็นไฟล์ (ไม่ใช่ JSON)"""
+    req = urllib.request.Request(BASE + path, headers={"Authorization": f"Bearer {token}"})
+    try:
+        with urllib.request.urlopen(req) as r:
+            r.read()
+            return r.status
+    except urllib.error.HTTPError as e:
+        return e.code
+
+
 def login(email, password):
     code, body = call("POST", "/auth/token", form={"username": email, "password": password})
     assert code == 200, f"login {email} ไม่สำเร็จ: {code} {body}"
@@ -197,6 +214,62 @@ def main():
         if s2_id:
             check("อาจารย์แก้คะแนนเอง", "PUT", f"/scores/class/{class_id}/student/{s2_id}", 200, token=T,
                   json_body={"score": 7.5, "note": "test"})
+
+        print("\n== สถานะที่อนุมานได้ (คนที่ไม่ได้เช็คชื่อ) ==")
+        rows = check("ทุกแถวของคลาส (อาจารย์)", "GET", f"/attendance/records?class_id={class_id}", 200, token=T)
+        if rows is not None:
+            mine = sorted(r["status"] for r in rows if r["student_id"] == student_id)
+            # วันนี้เช็คชื่อได้ 1, เมื่อวาน + คาบที่หมดเวลา = ขาด 2, คาบที่ยังไม่ถึงเวลา = upcoming 1
+            expect = sorted(["present", "absent", "absent"] + (["upcoming"] if future.date() == now.date() else []))
+            if past.date() != now.date():
+                expect.remove("absent")
+            expect_check("สถานะของ student01 ครบทุกคาบ", mine, expect)
+        check("นักศึกษาดู records ไม่ได้", "GET", "/attendance/records", 403, token=S)
+        mys = check("คาบของฉันย้อนหลัง (นักศึกษา)", "GET",
+                    f"/attendance/my-sessions?start={yesterday}&end={today}", 200, token=S)
+        if mys is not None:
+            y = [s["status"] for s in mys if s["class_id"] == class_id and s["session_date"] == yesterday]
+            expect_check("คาบเมื่อวานที่ไม่ได้เช็คชื่อ = ขาด", y, ["absent"])
+
+        print("\n== สูตรคะแนน (ตรงกับหน้าเว็บ) ==")
+        rec = check("คำนวณคะแนนอีกครั้ง", "POST", f"/scores/recalculate/{class_id}", 200, token=T)
+        if rec is not None:
+            s1 = next(r for r in rec if r["student_id"] == student_id)
+            # per_session: มา 1 จาก 4 คาบ ครั้งละ 1 -> 1/4 x 10 = 2.50
+            expect_check("คะแนน student01 = 2.50", s1["score"], "2.50")
+        if s2_id:
+            r = check("บันทึกคะแนนแบบไม่ใช่ manual", "PUT", f"/scores/class/{class_id}/student/{s2_id}", 200,
+                      token=T, json_body={"score": 0, "manual": False})
+            if r:
+                expect_check("is_manual_override = false", r["is_manual_override"], False)
+
+        print("\n== ข้อมูลประกอบสำหรับหน้าเว็บ ==")
+        mine_classes = check("คลาสของอาจารย์", "GET", "/classes/mine", 200, token=T)
+        if mine_classes is not None:
+            c = next((c for c in mine_classes if c["id"] == class_id), None)
+            expect_check("คลาสมีชื่อวิชาและจำนวนนักศึกษา", c and (c["course_code"], c["student_count"]), (TAG, 2))
+        studs = check("รายชื่อนักศึกษา", "GET", "/students", 200, token=T)
+        if studs is not None:
+            s1 = next(s for s in studs if s["id"] == student_id)
+            expect_check("มีสถานะใบหน้า", s1["face_status"], "approved")
+            status_code = raw_status(f"/face/{s1['face_profile_id']}/image", T)
+            expect_check("อาจารย์ดูรูปใบหน้าได้", status_code, 200)
+
+    print("\n== แก้ข้อมูลตัวเอง / รหัสผ่าน ==")
+    me = call("GET", "/students/me", S)[1]
+    check("นักศึกษาแก้เบอร์โทรตัวเอง", "PUT", "/students/me", 200, token=S, json_body={"phone": "0800000000"})
+    check("คืนค่าเบอร์โทรเดิม", "PUT", "/students/me", 200, token=S, json_body={"phone": me["phone"]})
+    tme = call("GET", "/teachers/me", T)[1]
+    check("อาจารย์แก้ตำแหน่งตัวเอง", "PUT", "/teachers/me", 200, token=T, json_body={"position": TAG})
+    check("คืนค่าตำแหน่งเดิม", "PUT", "/teachers/me", 200, token=T, json_body={"position": tme["position"]})
+    check("รหัสผ่านเดิมผิด -> 400", "POST", "/auth/change-password", 400, token=S,
+          json_body={"current_password": "wrong", "new_password": "abcdef"})
+    if s2_id:
+        S2 = login(f"{TAG.lower()}-s@example.com", "Passw0rd!")
+        check("เปลี่ยนรหัสผ่าน", "POST", "/auth/change-password", 204, token=S2,
+              json_body={"current_password": "Passw0rd!", "new_password": "NewPass1!"})
+        check("login ด้วยรหัสผ่านใหม่", "POST", "/auth/token", 200,
+              form={"username": f"{TAG.lower()}-s@example.com", "password": "NewPass1!"})
 
     print("\n== ประกาศ ==")
     ann = check("สร้างประกาศ", "POST", "/announcements", 201, token=T,

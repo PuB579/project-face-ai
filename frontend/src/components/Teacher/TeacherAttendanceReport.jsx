@@ -1,7 +1,8 @@
+import { useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import {
   ClipboardList,
   ChevronDown,
-  CalendarDays,
   Search,
   RotateCcw,
   FileSpreadsheet,
@@ -30,70 +31,122 @@ import {
   Cell,
 } from "recharts";
 import TeacherLayout from "./TeacherLayout";
+import LoadState from "../LoadState";
 import { useAppearanceSettings } from "./useAppearanceSettings";
+import { colorOf, useTeacherData } from "./useTeacherData";
+import {
+  addDays,
+  countStatus,
+  dailyTrend,
+  downloadBlob,
+  groupBy,
+  isoDate,
+  pct,
+  printTable,
+  termLabel,
+  toExcel,
+} from "../../lib/format";
 
-const courseAttendance = [
-  { code: "CS-201", name: "Data Structures", present: 89, late: 4, absent: 1 },
-  { code: "CS-202", name: "OOP", present: 85, late: 6, absent: 3 },
-  { code: "CS-203", name: "Database Systems", present: 78, late: 8, absent: 6 },
-  { code: "CS-204", name: "AI Intro", present: 82, late: 5, absent: 3 },
-  { code: "CS-205", name: "Operating Systems", present: 56, late: 12, absent: 12 },
-];
-
-const courseSummaryTable = [
-  { code: "CS-201", icon: "bg-blue-100 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400", name: "โครงสร้างข้อมูล (Data Structures)", term: "1/2567", students: 32, present: 28, late: 2, absent: 2, rate: 87.5 },
-  { code: "CS-202", icon: "bg-purple-100 dark:bg-purple-950/40 text-purple-600 dark:text-purple-400", name: "การเขียนโปรแกรมเชิงวัตถุ (OOP)", term: "1/2567", students: 30, present: 26, late: 3, absent: 1, rate: 86.7 },
-  { code: "CS-203", icon: "bg-orange-100 dark:bg-orange-950/40 text-orange-500 dark:text-orange-400", name: "ฐานข้อมูล (Database Systems)", term: "1/2567", students: 28, present: 22, late: 3, absent: 3, rate: 78.6 },
-  { code: "CS-204", icon: "bg-teal-100 dark:bg-teal-950/40 text-teal-600 dark:text-teal-400", name: "ปัญญาประดิษฐ์เบื้องต้น (AI Intro)", term: "1/2567", students: 24, present: 19, late: 2, absent: 3, rate: 79.2 },
-  { code: "CS-205", icon: "bg-rose-100 dark:bg-rose-950/40 text-rose-500 dark:text-rose-400", name: "ระบบปฏิบัติการ (Operating Systems)", term: "1/2567", students: 14, present: 8, late: 4, absent: 2, rate: 57.1 },
-];
-
-const dailyTrend = [
-  { day: "1 พ.ค.", present: 92, late: 6, absent: 2 },
-  { day: "4 พ.ค.", present: 88, late: 8, absent: 4 },
-  { day: "7 พ.ค.", present: 95, late: 4, absent: 1 },
-  { day: "10 พ.ค.", present: 90, late: 7, absent: 3 },
-  { day: "13 พ.ค.", present: 85, late: 10, absent: 5 },
-  { day: "16 พ.ค.", present: 93, late: 5, absent: 2 },
-  { day: "19 พ.ค.", present: 89, late: 8, absent: 3 },
-];
-
-const topAbsentees = [
-  { rank: 1, id: "6601234567", name: "นายสมชาย ใจดี", count: 8 },
-  { rank: 2, id: "6601234588", name: "นางสาวมลวรรณ ศรีสุข", count: 7 },
-  { rank: 3, id: "6601234501", name: "นายภานุภา ทองดี", count: 6 },
-];
-
+const FINAL = new Set(["present", "late", "absent"]);
 export default function TeacherAttendanceReport() {
   const { t } = useAppearanceSettings();
-  const maxAbsentCount = Math.max(...topAbsentees.map((s) => s.count));
+  const [searchParams] = useSearchParams();
+  const [classId, setClassId] = useState(searchParams.get("class") || "");
+  const [search, setSearch] = useState("");
+  const [dateFrom, setDateFrom] = useState(() => isoDate(addDays(new Date(), -29)));
+  const [dateTo, setDateTo] = useState(() => isoDate());
+  const [exportError, setExportError] = useState("");
+  const { classes, records, loading, error, reload } = useTeacherData({ start: dateFrom, end: dateTo });
+
+  const scoped = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return records.filter(
+      (r) =>
+        FINAL.has(r.status) &&
+        (!classId || r.class_id === Number(classId)) &&
+        (!q || `${r.student_code} ${r.student_name}`.toLowerCase().includes(q))
+    );
+  }, [records, classId, search]);
+  const counts = countStatus(scoped);
+  const shownClasses = classes.filter((c) => !classId || c.id === Number(classId));
+  const studentCount = shownClasses.reduce((sum, c) => sum + c.student_count, 0);
 
   const summaryStats = [
-    { icon: <UsersRound className="w-6 h-6 text-blue-600 dark:text-blue-400" />, iconBg: "bg-blue-100 dark:bg-blue-950/40", label: t("report.stats.totalStudents"), value: "142", sub: t("common.units.people"), trendColor: "text-emerald-600 dark:text-emerald-400", trend: "↑ 2.9%" },
-    { icon: <CheckCircle2 className="w-6 h-6 text-emerald-600 dark:text-emerald-400" />, iconBg: "bg-emerald-100 dark:bg-emerald-950/40", label: t("report.stats.totalPresent"), value: "2,845", sub: t("common.units.times"), trend: "93.2%", trendColor: "text-emerald-600 dark:text-emerald-400" },
-    { icon: <Clock className="w-6 h-6 text-amber-500 dark:text-amber-400" />, iconBg: "bg-amber-100 dark:bg-amber-950/40", label: t("report.stats.late"), value: "156", sub: t("common.units.times"), trend: "5.1%", trendColor: "text-amber-500 dark:text-amber-400" },
-    { icon: <XCircle className="w-6 h-6 text-red-500 dark:text-red-400" />, iconBg: "bg-red-100 dark:bg-red-950/40", label: t("report.stats.absent"), value: "52", sub: t("common.units.times"), trend: "1.7%", trendColor: "text-red-500 dark:text-red-400" },
+    { icon: <UsersRound className="w-6 h-6 text-blue-600 dark:text-blue-400" />, iconBg: "bg-blue-100 dark:bg-blue-950/40", label: t("report.stats.totalStudents"), value: studentCount.toLocaleString(), sub: t("common.units.people"), trend: `${shownClasses.length} ${t("live.classesUnit")}` },
+    { icon: <CheckCircle2 className="w-6 h-6 text-emerald-600 dark:text-emerald-400" />, iconBg: "bg-emerald-100 dark:bg-emerald-950/40", label: t("report.stats.totalPresent"), value: counts.present.toLocaleString(), sub: t("common.units.times"), trend: `${pct(counts.present, counts.total).toFixed(1)}%`, trendColor: "text-emerald-600 dark:text-emerald-400" },
+    { icon: <Clock className="w-6 h-6 text-amber-500 dark:text-amber-400" />, iconBg: "bg-amber-100 dark:bg-amber-950/40", label: t("report.stats.late"), value: counts.late.toLocaleString(), sub: t("common.units.times"), trend: `${pct(counts.late, counts.total).toFixed(1)}%`, trendColor: "text-amber-500 dark:text-amber-400" },
+    { icon: <XCircle className="w-6 h-6 text-red-500 dark:text-red-400" />, iconBg: "bg-red-100 dark:bg-red-950/40", label: t("report.stats.absent"), value: counts.absent.toLocaleString(), sub: t("common.units.times"), trend: `${pct(counts.absent, counts.total).toFixed(1)}%`, trendColor: "text-red-500 dark:text-red-400" },
   ];
 
   const overallSummary = [
-    { name: t("common.status.present"), value: 2845, pct: "93.2%", color: "#22c55e" },
-    { name: t("common.status.late"), value: 156, pct: "5.1%", color: "#f59e0b" },
-    { name: t("common.status.absent"), value: 52, pct: "1.7%", color: "#ef4444" },
-  ];
+    { name: t("common.status.present"), value: counts.present, color: "#22c55e" },
+    { name: t("common.status.late"), value: counts.late, color: "#f59e0b" },
+    { name: t("common.status.absent"), value: counts.absent, color: "#ef4444" },
+  ].map((s) => ({ ...s, pct: `${pct(s.value, counts.total).toFixed(1)}%` }));
 
+  const byClass = groupBy(scoped, (r) => r.class_id);
+  const courseSummaryTable = shownClasses.map((cls) => {
+    const c = countStatus(byClass.get(cls.id) || []);
+    const index = classes.indexOf(cls);
+    return {
+      id: cls.id,
+      code: cls.course_code || "-",
+      shortName: cls.class_code || cls.course_code,
+      icon: colorOf(index).icon,
+      name: cls.course_name,
+      term: termLabel(cls),
+      students: cls.student_count,
+      present: c.present,
+      late: c.late,
+      absent: c.absent,
+      rate: c.rate,
+    };
+  });
+  const courseAttendance = courseSummaryTable;
+
+  const trend = dailyTrend(scoped);
+  const topAbsentees = [...groupBy(scoped.filter((r) => r.status === "absent"), (r) => r.student_id).values()]
+    .map((rows) => ({ id: rows[0].student_code, name: rows[0].student_name, count: rows.length }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 5)
+    .map((s, i) => ({ ...s, rank: i + 1 }));
+  const maxAbsentCount = Math.max(1, ...topAbsentees.map((s) => s.count));
+
+  const reportHeaders = ["รหัสวิชา", "รายวิชา", "ภาคเรียน", "นักศึกษา", "เข้าเรียน", "มาสาย", "ขาดเรียน", "อัตราการเข้าเรียน (%)"];
+  const reportRows = () =>
+    courseSummaryTable.map((c) => [c.code, c.name, c.term, c.students, c.present, c.late, c.absent, c.rate.toFixed(1)]);
+  const reportTitle = `รายงานการเข้าเรียน ${dateFrom} ถึง ${dateTo}`;
+  const exportExcel = () => downloadBlob(`รายงานการเข้าเรียน_${dateFrom}_${dateTo}.xls`, toExcel(reportTitle, reportHeaders, reportRows()));
+  const exportPdf = () => {
+    try {
+      setExportError("");
+      printTable(reportTitle, reportHeaders, reportRows());
+    } catch (err) {
+      setExportError(err.message);
+    }
+  };
+  const resetFilters = () => {
+    setClassId("");
+    setSearch("");
+    setDateFrom(isoDate(addDays(new Date(), -29)));
+    setDateTo(isoDate());
+  };
+  const dateInputCls =
+    "border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 rounded-xl px-3 py-2 text-sm text-slate-600 dark:text-slate-300";
   return (
     <TeacherLayout
       titleIcon={ClipboardList}
       titleKey="nav.report"
       subtitleKey="report.subtitle"
       headerExtra={
-        <button className="hidden sm:flex items-center gap-2 border border-slate-200 dark:border-slate-700 rounded-xl px-4 py-2.5 text-sm text-slate-600 dark:text-slate-300 font-medium hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors shrink-0">
-          <CalendarDays className="w-4 h-4 text-slate-400 dark:text-slate-500" />
-          1 พ.ค. 2567 - 20 พ.ค. 2567
-          <ChevronDown className="w-4 h-4 text-slate-400 dark:text-slate-500" />
-        </button>
+        <div className="hidden sm:flex items-center gap-2 shrink-0">
+          <input type="date" value={dateFrom} max={dateTo} onChange={(e) => e.target.value && setDateFrom(e.target.value)} className={dateInputCls} />
+          <span className="text-slate-400">-</span>
+          <input type="date" value={dateTo} min={dateFrom} onChange={(e) => e.target.value && setDateTo(e.target.value)} className={dateInputCls} />
+        </div>
       }
     >
+      <LoadState loading={loading} error={error || exportError} onRetry={reload} />
       {/* Stat cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
         {summaryStats.map((s) => (
@@ -105,7 +158,7 @@ export default function TeacherAttendanceReport() {
                 <span className="text-2xl font-bold text-slate-900 dark:text-slate-100 leading-tight">{s.value}</span>
                 <span className="text-xs text-slate-400 dark:text-slate-500">{s.sub}</span>
               </div>
-              <div className={`text-xs mt-0.5 truncate ${s.trendColor || "text-emerald-600 dark:text-emerald-400"}`}>{s.trend}</div>
+              <div className={`text-xs mt-0.5 truncate ${s.trendColor || "text-slate-400 dark:text-slate-500"}`}>{s.trend}</div>
             </div>
           </div>
         ))}
@@ -117,25 +170,30 @@ export default function TeacherAttendanceReport() {
           <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 dark:text-slate-500" />
           <input
             type="text"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
             placeholder={t("report.searchPlaceholder")}
             className="w-full pl-10 pr-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-sm text-slate-700 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-200 dark:focus:ring-blue-900"
           />
         </div>
 
-        <FilterSelect label={t("report.filters.course")} />
-        <FilterSelect label={t("report.filters.status")} />
-        <FilterSelect label={t("report.filters.term")} />
-
-        <button className="flex items-center gap-2 text-sm font-medium text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 transition-colors px-3 py-2.5">
+        <FilterSelect label={t("report.filters.course")} value={classId} onChange={setClassId}>
+          {classes.map((c) => (
+            <option key={c.id} value={c.id}>
+              {c.course_code} {c.course_name}
+            </option>
+          ))}
+        </FilterSelect>
+        <button onClick={resetFilters} className="flex items-center gap-2 text-sm font-medium text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 transition-colors px-3 py-2.5">
           <RotateCcw className="w-4 h-4" />
           {t("common.actions.reset")}
         </button>
 
-        <button className="flex items-center gap-2 bg-emerald-500 hover:bg-emerald-600 transition-colors text-white text-sm font-semibold px-4 py-2.5 rounded-xl shadow-sm shadow-emerald-100 dark:shadow-emerald-950">
+        <button onClick={exportExcel} className="flex items-center gap-2 bg-emerald-500 hover:bg-emerald-600 transition-colors text-white text-sm font-semibold px-4 py-2.5 rounded-xl shadow-sm shadow-emerald-100 dark:shadow-emerald-950">
           <FileSpreadsheet className="w-4 h-4" />
           {t("common.actions.exportExcel")}
         </button>
-        <button className="flex items-center gap-2 bg-red-500 hover:bg-red-600 transition-colors text-white text-sm font-semibold px-4 py-2.5 rounded-xl shadow-sm shadow-red-100 dark:shadow-red-950">
+        <button onClick={exportPdf} className="flex items-center gap-2 bg-red-500 hover:bg-red-600 transition-colors text-white text-sm font-semibold px-4 py-2.5 rounded-xl shadow-sm shadow-red-100 dark:shadow-red-950">
           <FileText className="w-4 h-4" />
           {t("common.actions.exportPdf")}
         </button>
@@ -152,12 +210,12 @@ export default function TeacherAttendanceReport() {
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={courseAttendance} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
                 <CartesianGrid vertical={false} stroke="#f1f5f9" />
-                <XAxis dataKey="code" tick={{ fontSize: 11, fill: "#94a3b8" }} axisLine={false} tickLine={false} />
+                <XAxis dataKey="shortName" tick={{ fontSize: 11, fill: "#94a3b8" }} axisLine={false} tickLine={false} />
                 <YAxis tick={{ fontSize: 11, fill: "#94a3b8" }} axisLine={false} tickLine={false} />
                 <Tooltip
                   contentStyle={{ borderRadius: 12, border: "1px solid #e2e8f0" }}
                   labelFormatter={(label) => {
-                    const c = courseAttendance.find((x) => x.code === label);
+                    const c = courseAttendance.find((x) => x.shortName === label);
                     return c ? `${c.code} — ${c.name}` : label;
                   }}
                 />
@@ -186,7 +244,7 @@ export default function TeacherAttendanceReport() {
               </PieChart>
             </ResponsiveContainer>
             <div className="absolute inset-0 flex flex-col items-center justify-center">
-              <div className="text-2xl font-bold text-slate-900 dark:text-slate-100">2,845</div>
+              <div className="text-2xl font-bold text-slate-900 dark:text-slate-100">{counts.total.toLocaleString()}</div>
               <div className="text-xs text-slate-400 dark:text-slate-500">{t("common.units.times")}</div>
             </div>
           </div>
@@ -215,9 +273,7 @@ export default function TeacherAttendanceReport() {
               <ClipboardList className="w-5 h-5 text-slate-700 dark:text-slate-300" />
               <h3 className="font-bold text-slate-900 dark:text-slate-100">{t("report.courseSummaryTitle")}</h3>
             </div>
-            <button className="flex items-center gap-1 text-xs font-medium text-slate-500 dark:text-slate-400 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-1.5">
-              {t("history.statusTabs.all")} <ChevronDown className="w-3.5 h-3.5" />
-            </button>
+
           </div>
           <table className="w-full text-sm min-w-[640px]">
             <thead>
@@ -234,10 +290,10 @@ export default function TeacherAttendanceReport() {
             </thead>
             <tbody>
               {courseSummaryTable.map((c) => (
-                <tr key={c.code} className="border-b border-slate-50 dark:border-slate-800/60 last:border-0">
+                <tr key={c.id} className="border-b border-slate-50 dark:border-slate-800/60 last:border-0">
                   <td className="py-3 pr-3 whitespace-nowrap">
                     <span className={`inline-flex items-center justify-center w-8 h-8 rounded-lg font-bold text-[11px] ${c.icon}`}>
-                      {c.code.split("-")[1]}
+                      {c.code.split("-").pop()}
                     </span>
                   </td>
                   <td className="py-3 pr-3 text-slate-800 dark:text-slate-100 font-medium whitespace-nowrap">{c.name}</td>
@@ -266,13 +322,11 @@ export default function TeacherAttendanceReport() {
         <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-100 dark:border-slate-800 shadow-sm p-6">
           <div className="flex items-center justify-between mb-4">
             <h3 className="font-bold text-slate-900 dark:text-slate-100">{t("report.dailyChartTitle")}</h3>
-            <button className="flex items-center gap-1 text-xs font-medium text-slate-500 dark:text-slate-400 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-1.5">
-              {t("report.last30Days")} <ChevronDown className="w-3.5 h-3.5" />
-            </button>
+
           </div>
           <div className="h-64">
             <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={dailyTrend} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+              <LineChart data={trend} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
                 <CartesianGrid vertical={false} stroke="#f1f5f9" />
                 <XAxis dataKey="day" tick={{ fontSize: 11, fill: "#94a3b8" }} axisLine={false} tickLine={false} />
                 <YAxis tick={{ fontSize: 11, fill: "#94a3b8" }} axisLine={false} tickLine={false} />
@@ -292,11 +346,12 @@ export default function TeacherAttendanceReport() {
                 <Trophy className="w-4 h-4 text-amber-500 dark:text-amber-400" />
                 <h4 className="font-bold text-slate-900 dark:text-slate-100 text-sm">{t("report.topAbsenteesTitle")}</h4>
               </div>
-              <a href="#" className="text-xs text-blue-600 dark:text-blue-400 font-medium hover:underline">
-                {t("common.actions.viewAll")}
-              </a>
+
             </div>
             <div className="space-y-3">
+              {topAbsentees.length === 0 && (
+                <div className="text-sm text-slate-400 dark:text-slate-500">{t("live.noAbsentees")}</div>
+              )}
               {topAbsentees.map((s) => (
                 <div key={s.id} className="flex items-center gap-3">
                   <span className="text-xs font-bold text-slate-400 dark:text-slate-500 w-4 text-center shrink-0">{s.rank}</span>
@@ -327,11 +382,18 @@ export default function TeacherAttendanceReport() {
   );
 }
 
-function FilterSelect({ label }) {
+function FilterSelect({ label, value, onChange, children }) {
   return (
-    <button className="flex items-center gap-2 border border-slate-200 dark:border-slate-700 rounded-xl px-4 py-2.5 text-sm text-slate-600 dark:text-slate-300 font-medium hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors shrink-0">
-      {label}
-      <ChevronDown className="w-4 h-4 text-slate-400 dark:text-slate-500" />
-    </button>
+    <div className="relative shrink-0">
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="appearance-none border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 rounded-xl pl-4 pr-9 py-2.5 text-sm text-slate-600 dark:text-slate-300 font-medium hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+      >
+        <option value="">{label}</option>
+        {children}
+      </select>
+      <ChevronDown className="w-4 h-4 text-slate-400 dark:text-slate-500 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+    </div>
   );
 }

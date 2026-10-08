@@ -256,6 +256,31 @@ class Class(Base):
         "Announcement", back_populates="class_", cascade="all, delete-orphan"
     )
 
+    # ข้อมูลประกอบสำหรับ ClassOut (ไม่ใช่คอลัมน์ในฐานข้อมูล)
+    @property
+    def course_code(self) -> str | None:
+        return self.course.course_code if self.course else None
+
+    @property
+    def course_name(self) -> str | None:
+        return self.course.course_name if self.course else None
+
+    @property
+    def credit(self) -> int | None:
+        return self.course.credit if self.course else None
+
+    @property
+    def teacher_id(self) -> int | None:
+        return self.course.teacher_id if self.course else None
+
+    @property
+    def teacher_name(self) -> str | None:
+        return self.course.teacher.full_name if self.course and self.course.teacher else None
+
+    @property
+    def student_count(self) -> int:
+        return sum(1 for e in self.enrollments if e.status == EnrollmentStatus.enrolled)
+
 
 # ---------------------------------------------------------------------------
 # enrollments

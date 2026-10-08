@@ -2,14 +2,12 @@ import { useMemo, useState } from "react";
 import {
   History,
   ChevronDown,
-  CalendarDays,
   CalendarClock,
   Search,
   RotateCcw,
   Circle,
   Clock,
   XCircle,
-  MoreHorizontal,
   BarChart3,
   Trophy,
   User,
@@ -26,8 +24,12 @@ import {
   ResponsiveContainer,
 } from "recharts";
 import TeacherLayout from "./TeacherLayout";
+import LoadState from "../LoadState";
 import { useAppearanceSettings } from "./useAppearanceSettings";
+import { useTeacherData } from "./useTeacherData";
+import { addDays, countStatus, dailyTrend, groupBy, hhmm, initial, isoDate, pct, thaiDate } from "../../lib/format";
 
+const FINAL = new Set(["present", "late", "absent"]);
 const statusTabs = [
   { key: "all", labelKey: "history.statusTabs.all", icon: Circle, activeCls: "bg-blue-600 text-white border-blue-600" },
   { key: "present", labelKey: "history.statusTabs.present", icon: CheckCircle2, activeCls: "bg-emerald-50 dark:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400 border-emerald-200 dark:border-emerald-900" },
@@ -41,66 +43,67 @@ const statusMeta = {
   absent: { labelKey: "common.status.absent", cls: "bg-red-50 dark:bg-red-950/40 text-red-500 dark:text-red-400", icon: XCircle },
 };
 
-const checkinLogs = [
-  { classTime: "20 พ.ค. 2567 09:00", course: "CS-201 โครงสร้างข้อมูล (Data Structures)", studentId: "6601234567", studentName: "นายสมชาย ใจดี", section: "CS101", status: "present", checkedAt: "20 พ.ค. 2567 09:00", note: "-" },
-  { classTime: "20 พ.ค. 2567 09:00", course: "CS-201 โครงสร้างข้อมูล (Data Structures)", studentId: "6601234588", studentName: "นางสาวกมลวรรณ ศรีสุข", section: "CS101", status: "present", checkedAt: "20 พ.ค. 2567 09:00", note: "-" },
-  { classTime: "20 พ.ค. 2567 09:00", course: "CS-202 การเขียนโปรแกรมเชิงวัตถุ (OOP)", studentId: "6601234501", studentName: "นายศิวัฒน์ โสภณกมล", section: "CS101", status: "late", checkedAt: "20 พ.ค. 2567 09:15", note: "มาสาย 7 นาที" },
-  { classTime: "20 พ.ค. 2567 09:00", course: "CS-203 ฐานข้อมูล (Database Systems)", studentId: "6601234604", studentName: "นางสาวปฏิญญา จันทร์เพ็ญ", section: "CS101", status: "absent", checkedAt: "-", note: "-" },
-  { classTime: "19 พ.ค. 2567 13:00", course: "CS-205 ระบบปฏิบัติการ (Operating Systems)", studentId: "6601234506", studentName: "นายกฤษฎา ทองดี", section: "CS102", status: "present", checkedAt: "19 พ.ค. 2567 13:05", note: "-" },
-  { classTime: "19 พ.ค. 2567 13:00", course: "CS-205 ระบบปฏิบัติการ (Operating Systems)", studentId: "6601234522", studentName: "นางสาวปรีณคา เหมะนาว", section: "CS102", status: "present", checkedAt: "19 พ.ค. 2567 13:10", note: "-" },
-  { classTime: "19 พ.ค. 2567 13:00", course: "CS-205 ระบบปฏิบัติการ (Operating Systems)", studentId: "6601234555", studentName: "นายธนภัทร สายทอง", section: "CS102", status: "late", checkedAt: "19 พ.ค. 2567 13:20", note: "มาสาย 15 นาที" },
-];
-
-const dailyTrend = [
-  { day: "21 เม.ย.", present: 120, late: 8, absent: 4 },
-  { day: "24 เม.ย.", present: 128, late: 10, absent: 3 },
-  { day: "27 เม.ย.", present: 132, late: 6, absent: 2 },
-  { day: "30 เม.ย.", present: 118, late: 14, absent: 6 },
-  { day: "3 พ.ค.", present: 125, late: 9, absent: 5 },
-  { day: "6 พ.ค.", present: 130, late: 7, absent: 3 },
-  { day: "9 พ.ค.", present: 122, late: 12, absent: 4 },
-  { day: "12 พ.ค.", present: 134, late: 6, absent: 2 },
-  { day: "15 พ.ค.", present: 129, late: 8, absent: 3 },
-  { day: "18 พ.ค.", present: 126, late: 10, absent: 5 },
-  { day: "20 พ.ค.", present: 131, late: 7, absent: 3 },
-];
-
-const topAbsentees = [
-  { rank: 1, id: "6601234567", name: "นายกิตติพงษ์ ใจดี", count: 8, avatar: "https://i.pravatar.cc/100?img=12" },
-  { rank: 2, id: "6601234588", name: "นางสาวกมลวรรณ ศรีสุข", count: 7, avatar: "https://i.pravatar.cc/100?img=47" },
-  { rank: 3, id: "6601234501", name: "นายธนวัฒน์ แก้ววงศ์", count: 6, avatar: "https://i.pravatar.cc/100?img=33" },
-];
-
 export default function TeacherCheckinHistory() {
   const { t } = useAppearanceSettings();
   const [activeStatus, setActiveStatus] = useState("all");
-  const maxAbsentCount = Math.max(...topAbsentees.map((s) => s.count));
+  const [dateFrom, setDateFrom] = useState(() => isoDate(addDays(new Date(), -29)));
+  const [dateTo, setDateTo] = useState(() => isoDate());
+  const [search, setSearch] = useState("");
+  const [classId, setClassId] = useState("");
+  const { classes, records, loading, error, reload } = useTeacherData({ start: dateFrom, end: dateTo });
 
+  // เฉพาะแถวที่ได้ผลแล้ว (ไม่รวมคาบที่ยังเปิดให้เช็คชื่ออยู่)
+  const scoped = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return records.filter(
+      (r) =>
+        FINAL.has(r.status) &&
+        (!classId || r.class_id === Number(classId)) &&
+        (!q || `${r.student_code} ${r.student_name}`.toLowerCase().includes(q))
+    );
+  }, [records, classId, search]);
+
+  const counts = countStatus(scoped);
+  const sessionCount = new Set(scoped.map((r) => r.session_id)).size;
   const summaryStats = [
-    { icon: <CalendarClock className="w-6 h-6 text-blue-600 dark:text-blue-400" />, iconBg: "bg-blue-100 dark:bg-blue-950/40", label: t("history.stats.totalCheckins"), value: "124", sub: t("common.units.times") },
-    { icon: <User className="w-6 h-6 text-emerald-600 dark:text-emerald-400" />, iconBg: "bg-emerald-100 dark:bg-emerald-950/40", label: t("history.stats.onTime"), value: "2,845", sub: t("common.units.times"), trend: "93.2%", trendColor: "text-emerald-600 dark:text-emerald-400" },
-    { icon: <Clock className="w-6 h-6 text-amber-500 dark:text-amber-400" />, iconBg: "bg-amber-100 dark:bg-amber-950/40", label: t("history.stats.late"), value: "156", sub: t("common.units.times"), trend: "5.1%", trendColor: "text-amber-500 dark:text-amber-400" },
-    { icon: <XCircle className="w-6 h-6 text-red-500 dark:text-red-400" />, iconBg: "bg-red-100 dark:bg-red-950/40", label: t("history.stats.absent"), value: "52", sub: t("common.units.times"), trend: "1.7%", trendColor: "text-red-500 dark:text-red-400" },
+    { icon: <CalendarClock className="w-6 h-6 text-blue-600 dark:text-blue-400" />, iconBg: "bg-blue-100 dark:bg-blue-950/40", label: t("history.stats.totalCheckins"), value: sessionCount.toLocaleString(), sub: t("common.units.times") },
+    { icon: <User className="w-6 h-6 text-emerald-600 dark:text-emerald-400" />, iconBg: "bg-emerald-100 dark:bg-emerald-950/40", label: t("history.stats.onTime"), value: counts.present.toLocaleString(), sub: t("common.units.times"), trend: `${pct(counts.present, counts.total).toFixed(1)}%`, trendColor: "text-emerald-600 dark:text-emerald-400" },
+    { icon: <Clock className="w-6 h-6 text-amber-500 dark:text-amber-400" />, iconBg: "bg-amber-100 dark:bg-amber-950/40", label: t("history.stats.late"), value: counts.late.toLocaleString(), sub: t("common.units.times"), trend: `${pct(counts.late, counts.total).toFixed(1)}%`, trendColor: "text-amber-500 dark:text-amber-400" },
+    { icon: <XCircle className="w-6 h-6 text-red-500 dark:text-red-400" />, iconBg: "bg-red-100 dark:bg-red-950/40", label: t("history.stats.absent"), value: counts.absent.toLocaleString(), sub: t("common.units.times"), trend: `${pct(counts.absent, counts.total).toFixed(1)}%`, trendColor: "text-red-500 dark:text-red-400" },
   ];
 
-  const filteredLogs = useMemo(
-    () => (activeStatus === "all" ? checkinLogs : checkinLogs.filter((l) => l.status === activeStatus)),
-    [activeStatus],
-  );
+  const filteredLogs = activeStatus === "all" ? scoped : scoped.filter((l) => l.status === activeStatus);
+  const trend = dailyTrend(scoped);
+  const topAbsentees = [...groupBy(scoped.filter((r) => r.status === "absent"), (r) => r.student_id).values()]
+    .map((rows) => ({ id: rows[0].student_code, name: rows[0].student_name, count: rows.length }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 5)
+    .map((s, i) => ({ ...s, rank: i + 1 }));
+  const maxAbsentCount = Math.max(1, ...topAbsentees.map((s) => s.count));
 
+  const resetFilters = () => {
+    setSearch("");
+    setClassId("");
+    setActiveStatus("all");
+    setDateFrom(isoDate(addDays(new Date(), -29)));
+    setDateTo(isoDate());
+  };
+  const dateInputCls =
+    "border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 rounded-xl px-3 py-2 text-sm text-slate-600 dark:text-slate-300";
   return (
     <TeacherLayout
       titleIcon={History}
       titleKey="nav.history"
       subtitleKey="history.subtitle"
       headerExtra={
-        <button className="hidden sm:flex items-center gap-2 border border-slate-200 dark:border-slate-700 rounded-xl px-4 py-2.5 text-sm text-slate-600 dark:text-slate-300 font-medium hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors shrink-0">
-          <CalendarDays className="w-4 h-4 text-slate-400 dark:text-slate-500" />
-          1 พ.ค. 2567 - 20 พ.ค. 2567
-          <ChevronDown className="w-4 h-4 text-slate-400 dark:text-slate-500" />
-        </button>
+        <div className="hidden sm:flex items-center gap-2 shrink-0">
+          <input type="date" value={dateFrom} max={dateTo} onChange={(e) => e.target.value && setDateFrom(e.target.value)} className={dateInputCls} />
+          <span className="text-slate-400">-</span>
+          <input type="date" value={dateTo} min={dateFrom} onChange={(e) => e.target.value && setDateTo(e.target.value)} className={dateInputCls} />
+        </div>
       }
     >
+      <LoadState loading={loading} error={error} onRetry={reload} />
       {/* Stat cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
         {summaryStats.map((s) => (
@@ -124,16 +127,21 @@ export default function TeacherCheckinHistory() {
           <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 dark:text-slate-500" />
           <input
             type="text"
-            placeholder="ค้นหานักศึกษา..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder={t("live.searchStudent")}
             className="w-full pl-10 pr-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-sm text-slate-700 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-200 dark:focus:ring-blue-900"
           />
         </div>
 
-        <FilterSelect label={t("history.filters.course")} />
-        <FilterSelect label={t("history.filters.status")} />
-        <FilterSelect label={t("history.filters.term")} />
-
-        <button className="flex items-center gap-2 border border-slate-200 dark:border-slate-700 rounded-xl px-4 py-2.5 text-sm text-slate-500 dark:text-slate-400 font-medium hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors shrink-0">
+        <FilterSelect label={t("history.filters.course")} value={classId} onChange={setClassId}>
+          {classes.map((c) => (
+            <option key={c.id} value={c.id}>
+              {c.course_code} {c.course_name}
+            </option>
+          ))}
+        </FilterSelect>
+        <button onClick={resetFilters} className="flex items-center gap-2 border border-slate-200 dark:border-slate-700 rounded-xl px-4 py-2.5 text-sm text-slate-500 dark:text-slate-400 font-medium hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors shrink-0">
           <RotateCcw className="w-4 h-4" />
           {t("history.filters.reset")}
         </button>
@@ -172,39 +180,45 @@ export default function TeacherCheckinHistory() {
               <th className="py-2 pr-3 font-medium">{t("history.table.status")}</th>
               <th className="py-2 pr-3 font-medium">{t("history.table.checkedAt")}</th>
               <th className="py-2 pr-3 font-medium">{t("history.table.note")}</th>
-              <th className="py-2 pr-3 font-medium text-right"></th>
             </tr>
           </thead>
           <tbody>
-            {filteredLogs.map((r, i) => {
+            {filteredLogs.map((r) => {
               const sm = statusMeta[r.status];
               const StatusIcon = sm.icon;
               return (
-                <tr key={i} className="border-b border-slate-50 dark:border-slate-800/60 last:border-0">
-                  <td className="py-3 pr-3 text-slate-500 dark:text-slate-400 whitespace-nowrap">{r.classTime}</td>
-                  <td className="py-3 pr-3 text-slate-800 dark:text-slate-100 font-medium whitespace-nowrap">{r.course}</td>
-                  <td className="py-3 pr-3 text-slate-500 dark:text-slate-400 whitespace-nowrap">{r.studentId}</td>
-                  <td className="py-3 pr-3 text-slate-800 dark:text-slate-100 whitespace-nowrap">{r.studentName}</td>
-                  <td className="py-3 pr-3 text-slate-500 dark:text-slate-400 whitespace-nowrap">{r.section}</td>
+                <tr key={`${r.session_id}-${r.enrollment_id}`} className="border-b border-slate-50 dark:border-slate-800/60 last:border-0">
+                  <td className="py-3 pr-3 text-slate-500 dark:text-slate-400 whitespace-nowrap">
+                    {thaiDate(r.session_date)} {hhmm(r.start_time)}
+                  </td>
+                  <td className="py-3 pr-3 text-slate-800 dark:text-slate-100 font-medium whitespace-nowrap">
+                    {r.course_code} {r.course_name}
+                  </td>
+                  <td className="py-3 pr-3 text-slate-500 dark:text-slate-400 whitespace-nowrap">{r.student_code}</td>
+                  <td className="py-3 pr-3 text-slate-800 dark:text-slate-100 whitespace-nowrap">{r.student_name}</td>
+                  <td className="py-3 pr-3 text-slate-500 dark:text-slate-400 whitespace-nowrap">{r.class_code || "-"}</td>
                   <td className="py-3 pr-3 whitespace-nowrap">
                     <span className={`inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-full ${sm.cls}`}>
                       <StatusIcon className="w-3.5 h-3.5" />
                       {t(sm.labelKey)}
                     </span>
                   </td>
-                  <td className="py-3 pr-3 text-slate-500 dark:text-slate-400 whitespace-nowrap">{r.checkedAt}</td>
-                  <td className="py-3 pr-3 text-slate-400 dark:text-slate-500 whitespace-nowrap">{r.note}</td>
-                  <td className="py-3 pr-3 text-right">
-                    <button className="w-8 h-8 inline-flex items-center justify-center rounded-lg text-slate-400 dark:text-slate-500 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors">
-                      <MoreHorizontal className="w-4 h-4" />
-                    </button>
+                  <td className="py-3 pr-3 text-slate-500 dark:text-slate-400 whitespace-nowrap">{r.check_in_time ? hhmm(r.check_in_time) : "-"}</td>
+                  <td className="py-3 pr-3 text-slate-400 dark:text-slate-500 whitespace-nowrap">
+                    {[
+                      r.status === "late" && r.late_minutes != null ? `${t("common.status.late")} ${r.late_minutes} ${t("common.units.minutes")}` : null,
+                      r.method === "manual" ? t("live.byManual") : null,
+                      r.method === "face" && r.confidence ? `${t("live.byFace")} ${Number(r.confidence).toFixed(1)}%` : null,
+                    ]
+                      .filter(Boolean)
+                      .join(" • ") || "-"}
                   </td>
                 </tr>
               );
             })}
             {filteredLogs.length === 0 && (
               <tr>
-                <td colSpan={9} className="py-8 text-center text-sm text-slate-400 dark:text-slate-500">
+                <td colSpan={8} className="py-8 text-center text-sm text-slate-400 dark:text-slate-500">
                   {t("history.noData")}
                 </td>
               </tr>
@@ -224,7 +238,7 @@ export default function TeacherCheckinHistory() {
           </div>
           <div className="h-64">
             <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={dailyTrend} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+              <LineChart data={trend} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
                 <CartesianGrid vertical={false} stroke="#f1f5f9" />
                 <XAxis dataKey="day" tick={{ fontSize: 11, fill: "#94a3b8" }} axisLine={false} tickLine={false} />
                 <YAxis tick={{ fontSize: 11, fill: "#94a3b8" }} axisLine={false} tickLine={false} />
@@ -244,10 +258,15 @@ export default function TeacherCheckinHistory() {
             <h3 className="font-bold text-slate-900 dark:text-slate-100">{t("history.topAbsenteesTitle")}</h3>
           </div>
           <div className="space-y-4">
+            {topAbsentees.length === 0 && (
+              <div className="text-sm text-slate-400 dark:text-slate-500">{t("live.noAbsentees")}</div>
+            )}
             {topAbsentees.map((s) => (
               <div key={s.id} className="flex items-center gap-3">
                 <span className="text-sm font-bold text-slate-400 dark:text-slate-500 w-5 text-center shrink-0">{s.rank}.</span>
-                <img src={s.avatar} alt={s.name} className="w-10 h-10 rounded-full object-cover shrink-0" />
+                <div className="w-10 h-10 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-300 font-bold flex items-center justify-center shrink-0">
+                  {initial(s.name)}
+                </div>
                 <div className="min-w-0 flex-1">
                   <div className="text-sm font-semibold text-slate-800 dark:text-slate-100 truncate">{s.id}</div>
                   <div className="text-xs text-slate-400 dark:text-slate-500 truncate">{s.name}</div>
@@ -269,11 +288,18 @@ export default function TeacherCheckinHistory() {
   );
 }
 
-function FilterSelect({ label }) {
+function FilterSelect({ label, value, onChange, children }) {
   return (
-    <button className="flex items-center gap-2 border border-slate-200 dark:border-slate-700 rounded-xl px-4 py-2.5 text-sm text-slate-600 dark:text-slate-300 font-medium hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors shrink-0">
-      {label}
-      <ChevronDown className="w-4 h-4 text-slate-400 dark:text-slate-500" />
-    </button>
+    <div className="relative shrink-0">
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="appearance-none border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 rounded-xl pl-4 pr-9 py-2.5 text-sm text-slate-600 dark:text-slate-300 font-medium hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+      >
+        <option value="">{label}</option>
+        {children}
+      </select>
+      <ChevronDown className="w-4 h-4 text-slate-400 dark:text-slate-500 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+    </div>
   );
 }

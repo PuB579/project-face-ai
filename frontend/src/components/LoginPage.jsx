@@ -1,5 +1,6 @@
-import React, { useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { api, clearSession, saveSession } from "../lib/api";
 import logoImg from "../assets/logo-cs.png";
 import bgHero from "../assets/bg-hero.jpg";
 import {
@@ -18,17 +19,9 @@ import {
   X,
 } from "lucide-react";
 
-// Demo accounts — replace with a real API call in production.
-// In a real system the backend authenticates the user and returns their role;
-// the frontend then routes based on that role.
-const DEMO_ACCOUNTS = [
-  { username: "student01", password: "Passw0rd!", role: "student" },
-  { username: "teacher01", password: "Teach123!", role: "teacher" },
-];
-
 const ROLE_HOME = {
   student: "/dashboard",
-  teacher: "/teacher/dashboard",
+  teacher: "/teacher-dashboard",
 };
 
 export default function LoginPage() {
@@ -42,6 +35,11 @@ export default function LoginPage() {
   const [submitError, setSubmitError] = useState("");
   const [success, setSuccess] = useState(false);
   const [loading, setLoading] = useState(false);
+
+  // ทุกปุ่ม "ออกจากระบบ" ลิงก์มาที่หน้านี้ จึงล้าง session ทุกครั้งที่เข้าหน้า login
+  useEffect(() => {
+    clearSession();
+  }, []);
 
   const navLinks = [
     { label: "หน้าแรก", active: true },
@@ -68,7 +66,7 @@ export default function LoginPage() {
   const passwordValid =
     touched.password && password.length >= 6 && !passwordError;
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
     setTouched({ username: true, password: true });
     setSuccess(false);
@@ -85,21 +83,25 @@ export default function LoginPage() {
     setLoading(true);
     setSubmitError("");
 
-    // simulate an auth check
-    setTimeout(() => {
-      setLoading(false);
-      const account = DEMO_ACCOUNTS.find(
-        (acc) => acc.username === username.trim() && acc.password === password
+    try {
+      const data = await api("/auth/login", {
+        method: "POST",
+        auth: false,
+        body: { username: username.trim(), password },
+      });
+      saveSession(data.access_token, data.user, rememberMe);
+      setSuccess(true);
+      setTimeout(() => navigate(ROLE_HOME[data.user.role] || "/dashboard"), 900);
+    } catch (err) {
+      setSuccess(false);
+      setSubmitError(
+        err.status === 401
+          ? "ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง กรุณาลองใหม่อีกครั้ง"
+          : err.message
       );
-      if (account) {
-        setSuccess(true);
-        setSubmitError("");
-        setTimeout(() => navigate(ROLE_HOME[account.role] || "/dashboard"), 900);
-      } else {
-        setSuccess(false);
-        setSubmitError("ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง กรุณาลองใหม่อีกครั้ง");
-      }
-    }, 700);
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -308,7 +310,7 @@ export default function LoginPage() {
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
                   onBlur={() => setTouched((t) => ({ ...t, username: true }))}
-                  placeholder="กรอกชื่อผู้ใช้หรือรหัส"
+                  placeholder="อีเมล รหัสนักศึกษา หรือรหัสอาจารย์"
                   className={`w-full pl-11 pr-11 py-3.5 rounded-xl border bg-white text-slate-800 placeholder:text-slate-400 focus:outline-none focus:ring-2 transition-colors ${
                     usernameError
                       ? "border-red-300 focus:ring-red-200"

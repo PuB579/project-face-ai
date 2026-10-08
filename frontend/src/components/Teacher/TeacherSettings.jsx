@@ -13,6 +13,7 @@ import {
   CheckCircle2,
 } from "lucide-react";
 import { ToggleSwitch } from "./TeacherProfile";
+import { api } from "../../lib/api";
 import { useAppearanceSettings } from "./useAppearanceSettings";
 import TeacherLayout from "./TeacherLayout";
 
@@ -66,9 +67,16 @@ export default function TeacherSettings() {
     setTimeout(() => setSaved(false), 2500);
   }
 
-  function handleExport() {
+  async function handleExport() {
+    // ข้อมูลบัญชีและรายวิชาจาก backend (ถ้าโหลดไม่ได้ก็ยังส่งออกการตั้งค่าได้)
+    const [profile, courses] = await Promise.all([
+      api("/teachers/me").catch(() => null),
+      api("/classes/mine").catch(() => []),
+    ]);
     const data = {
       exportedAt: new Date().toISOString(),
+      profile,
+      courses,
       notifications: notif,
       display: { theme, language, fontSize },
     };

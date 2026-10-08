@@ -145,7 +145,7 @@ uvicorn main:app --reload
 ## 5. สิ่งที่ยังไม่ได้ทำ (รู้ไว้ก่อน)
 
 - Refresh token (ตอนนี้มีแค่ access token อายุ 8 ชม.)
-- Export รายงานเป็น Excel/PDF จริง (มีแค่ JSON endpoints ให้ frontend ไปทำต่อ)
+- Export ฝั่ง backend (ตอนนี้ frontend สร้างไฟล์ CSV / Excel (.xls) / PDF (ผ่านหน้าพิมพ์) เองจากข้อมูล JSON)
 - Alembic migration (เพราะฐานข้อมูลถูกจัดการผ่าน phpMyAdmin โดยตรง)
 
 ## 6. การทดสอบ

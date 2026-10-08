@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Download,
   FileSpreadsheet,
@@ -19,8 +19,43 @@ import {
   BookOpen,
 } from "lucide-react";
 import TeacherLayout from "./TeacherLayout";
+import LoadState from "../LoadState";
 import { useAppearanceSettings } from "./useAppearanceSettings";
+import { useTeacherData } from "./useTeacherData";
+import { api } from "../../lib/api";
+import {
+  addDays,
+  countStatus,
+  downloadBlob,
+  groupBy,
+  hhmm,
+  isoDate,
+  printTable,
+  STATUS_LABEL,
+  termLabel,
+  thaiDate,
+  toCsv,
+  toExcel,
+} from "../../lib/format";
 
+const HISTORY_KEY = "faceattend_export_history";
+const FACE_LABEL = { approved: "อนุมัติแล้ว", pending: "รออนุมัติ", rejected: "ถูกปฏิเสธ", none: "ยังไม่ลงทะเบียน" };
+
+function loadHistory() {
+  try {
+    return JSON.parse(localStorage.getItem(HISTORY_KEY)) || [];
+  } catch {
+    return [];
+  }
+}
+
+function saveHistory(list) {
+  try {
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(list.slice(0, 20)));
+  } catch {
+    // ignore
+  }
+}
 /* ---------- Mock data ---------- */
 
 const dataTypeMeta = [
@@ -30,8 +65,6 @@ const dataTypeMeta = [
   { id: "summary", icon: Layers, color: "purple" },
 ];
 
-const dataTypeRows = { attendance: 2845, scores: 142, students: 142, summary: 5 };
-
 const colorMap = {
   blue: { bg: "bg-blue-50 dark:bg-blue-950/30", ring: "ring-blue-500", icon: "bg-blue-100 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400", text: "text-blue-600 dark:text-blue-400" },
   amber: { bg: "bg-amber-50 dark:bg-amber-950/30", ring: "ring-amber-500", icon: "bg-amber-100 dark:bg-amber-950/40 text-amber-600 dark:text-amber-400", text: "text-amber-600 dark:text-amber-400" },
@@ -39,49 +72,11 @@ const colorMap = {
   purple: { bg: "bg-purple-50 dark:bg-purple-950/30", ring: "ring-purple-500", icon: "bg-purple-100 dark:bg-purple-950/40 text-purple-600 dark:text-purple-400", text: "text-purple-600 dark:text-purple-400" },
 };
 
-const courses = [
-  { code: "CS-201", name: "Data Structures", count: 32 },
-  { code: "CS-202", name: "OOP", count: 30 },
-  { code: "CS-203", name: "Database Systems", count: 28 },
-  { code: "CS-204", name: "AI Intro", count: 24 },
-  { code: "CS-205", name: "Operating Systems", count: 14 },
-];
-
 const formats = [
-  { id: "excel", icon: FileSpreadsheet, label: "Excel", ext: ".xlsx", color: "text-emerald-600 dark:text-emerald-400", bg: "bg-emerald-50 dark:bg-emerald-950/30", ring: "ring-emerald-500" },
+  { id: "excel", icon: FileSpreadsheet, label: "Excel", ext: ".xls", color: "text-emerald-600 dark:text-emerald-400", bg: "bg-emerald-50 dark:bg-emerald-950/30", ring: "ring-emerald-500" },
   { id: "csv", icon: Table2, label: "CSV", ext: ".csv", color: "text-blue-600 dark:text-blue-400", bg: "bg-blue-50 dark:bg-blue-950/30", ring: "ring-blue-500" },
   { id: "pdf", icon: FileText, label: "PDF", ext: ".pdf", color: "text-red-500 dark:text-red-400", bg: "bg-red-50 dark:bg-red-950/30", ring: "ring-red-500" },
   { id: "json", icon: FileJson, label: "JSON", ext: ".json", color: "text-slate-600 dark:text-slate-300", bg: "bg-slate-100 dark:bg-slate-800", ring: "ring-slate-400" },
-];
-
-const previewRowsByType = {
-  attendance: [
-    ["12 พ.ค. 2569", "08:58", "65011001", "นายสมชาย ใจดี", "CS-201", "เข้าเรียน"],
-    ["12 พ.ค. 2569", "09:07", "65011006", "น.ส.พิมพ์ชนก แสงทอง", "CS-201", "มาสาย"],
-    ["12 พ.ค. 2569", "—", "65011012", "นายภานุภา ทองดี", "CS-203", "ขาดเรียน"],
-  ],
-  scores: [
-    ["65011001", "นายสมชาย ใจดี", "CS-201", "14", "1", "1", "8.75"],
-    ["65011006", "น.ส.พิมพ์ชนก แสงทอง", "CS-201", "10", "4", "2", "7.20"],
-    ["65011012", "นายภานุภา ทองดี", "CS-203", "9", "2", "5", "5.10"],
-  ],
-  students: [
-    ["65011001", "นายสมชาย ใจดี", "กลุ่ม A", "somchai.j@stu.ac.th", "ลงทะเบียนแล้ว"],
-    ["65011006", "น.ส.พิมพ์ชนก แสงทอง", "กลุ่ม A", "pimchanok.s@stu.ac.th", "ลงทะเบียนแล้ว"],
-    ["65011012", "นายภานุภา ทองดี", "กลุ่ม B", "phanupha.t@stu.ac.th", "รอลงทะเบียน"],
-  ],
-  summary: [
-    ["CS-201 Data Structures", "1/2567", "32", "87.5%"],
-    ["CS-202 OOP", "1/2567", "30", "86.7%"],
-    ["CS-203 Database Systems", "1/2567", "28", "78.6%"],
-  ],
-};
-
-const initialExportHistory = [
-  { id: 1, name: "ประวัติการเข้าเรียน_CS-201_พ.ค.2569.xlsx", typeId: "attendance", format: "excel", date: "20 พ.ค. 2569 · 14:32", size: "184 KB" },
-  { id: 2, name: "คะแนนเข้าเรียน_ทุกวิชา.pdf", typeId: "scores", format: "pdf", date: "18 พ.ค. 2569 · 09:05", size: "402 KB" },
-  { id: 3, name: "รายชื่อนักศึกษา_กลุ่ม-A.csv", typeId: "students", format: "csv", date: "15 พ.ค. 2569 · 16:47", size: "21 KB" },
-  { id: 4, name: "รายงานสรุปรายวิชา_1-2567.xlsx", typeId: "summary", format: "excel", date: "10 พ.ค. 2569 · 11:20", size: "96 KB" },
 ];
 
 const formatIconFor = (fmt) => formats.find((f) => f.id === fmt) || formats[0];
@@ -89,58 +84,186 @@ const formatIconFor = (fmt) => formats.find((f) => f.id === fmt) || formats[0];
 export default function TeacherExportData() {
   const { t } = useAppearanceSettings();
   const [selectedType, setSelectedType] = useState("attendance");
-  const [selectedCourses, setSelectedCourses] = useState(["CS-201", "CS-202", "CS-203", "CS-204", "CS-205"]);
-  const [dateFrom, setDateFrom] = useState("2569-05-01");
-  const [dateTo, setDateTo] = useState("2569-05-20");
+  const [selectedIds, setSelectedIds] = useState(null); // null = ทุกคลาส
+  const [dateFrom, setDateFrom] = useState(() => isoDate(addDays(new Date(), -29)));
+  const [dateTo, setDateTo] = useState(() => isoDate());
   const [selectedFormat, setSelectedFormat] = useState("excel");
   const [status, setStatus] = useState("idle"); // idle | working | done
-  const [history, setHistory] = useState(initialExportHistory);
+  const [history, setHistory] = useState(loadHistory);
+  const [exportError, setExportError] = useState("");
+  const { classes, records, loading, error, reload } = useTeacherData();
+  const [extra, setExtra] = useState({ rosters: {}, scores: {}, error: "" });
+
+  // รายชื่อนักศึกษาและคะแนนของทุกคลาส (ใช้กับข้อมูลประเภท "นักศึกษา" และ "คะแนน")
+  useEffect(() => {
+    if (!classes.length) return undefined;
+    let cancelled = false;
+    Promise.all(
+      classes.map((c) =>
+        Promise.all([api(`/classes/${c.id}/students`), api(`/scores/class/${c.id}`)]).then(([roster, scores]) => [
+          c.id,
+          roster,
+          scores,
+        ])
+      )
+    )
+      .then((rows) => {
+        if (cancelled) return;
+        setExtra({
+          rosters: Object.fromEntries(rows.map(([id, roster]) => [id, roster])),
+          scores: Object.fromEntries(rows.map(([id, , scores]) => [id, scores])),
+          error: "",
+        });
+      })
+      .catch((err) => !cancelled && setExtra((e) => ({ ...e, error: err.message })));
+    return () => {
+      cancelled = true;
+    };
+  }, [classes]);
+
+  const courses = classes.map((c) => ({ id: c.id, code: c.course_code, name: c.course_name, cls: c }));
+  const selectedCourses = selectedIds ?? courses.map((c) => c.id);
+  const setSelectedCourses = (fn) => setSelectedIds(fn(selectedCourses));
+
+  // แถวข้อมูลของแต่ละประเภท (ใช้ทั้งพรีวิวและไฟล์ที่ส่งออก)
+  function buildRows(type, ids, from, to) {
+    const idSet = new Set(ids);
+    const picked = courses.filter((c) => idSet.has(c.id));
+    if (type === "attendance") {
+      return records
+        .filter(
+          (r) =>
+            idSet.has(r.class_id) &&
+            r.session_date >= from &&
+            r.session_date <= to &&
+            ["present", "late", "absent"].includes(r.status)
+        )
+        .map((r) => [
+          thaiDate(r.session_date),
+          r.check_in_time ? hhmm(r.check_in_time) : "—",
+          r.student_code,
+          r.student_name,
+          r.course_code,
+          STATUS_LABEL[r.status],
+        ]);
+    }
+    if (type === "scores") {
+      const byKey = groupBy(
+        records.filter((r) => idSet.has(r.class_id) && r.session_date >= from && r.session_date <= to),
+        (r) => `${r.class_id}:${r.student_id}`
+      );
+      return picked.flatMap((c) =>
+        (extra.rosters[c.id] || []).map((e) => {
+          const cnt = countStatus(byKey.get(`${c.id}:${e.student_id}`) || []);
+          const score = (extra.scores[c.id] || []).find((s) => s.student_id === e.student_id);
+          return [e.student?.student_code, e.student?.full_name, c.code, cnt.present, cnt.late, cnt.absent, score ? Number(score.score).toFixed(2) : "-"];
+        })
+      );
+    }
+    if (type === "students") {
+      return picked.flatMap((c) =>
+        (extra.rosters[c.id] || []).map((e) => [
+          e.student?.student_code,
+          e.student?.full_name,
+          c.cls.class_code || c.code,
+          e.student?.email,
+          FACE_LABEL[e.student?.face_status] || "-",
+        ])
+      );
+    }
+    const byClass = groupBy(records.filter((r) => r.session_date >= from && r.session_date <= to), (r) => r.class_id);
+    return picked.map((c) => [
+      `${c.code} ${c.name}`,
+      termLabel(c.cls),
+      c.cls.student_count,
+      `${countStatus(byClass.get(c.id) || []).rate.toFixed(1)}%`,
+    ]);
+  }
 
   const dataTypes = dataTypeMeta.map((d) => ({
     ...d,
     title: t(`export.dataTypes.${d.id}.title`),
     desc: t(`export.dataTypes.${d.id}.desc`),
     fields: t(`export.fields.${d.id}`),
-    rows: dataTypeRows[d.id],
   }));
-
   const activeType = dataTypes.find((d) => d.id === selectedType);
   const activeFormat = formats.find((f) => f.id === selectedFormat);
+  const currentRows = buildRows(selectedType, selectedCourses, dateFrom, dateTo);
+  const estimatedRows = currentRows.length;
 
-  const estimatedRows = useMemo(() => {
-    if (selectedType === "summary") return selectedCourses.length;
-    const perCourse = activeType.rows / courses.length;
-    return Math.max(1, Math.round(perCourse * selectedCourses.length));
-  }, [selectedType, selectedCourses, activeType]);
-
-  function toggleCourse(code) {
-    setSelectedCourses((prev) => (prev.includes(code) ? prev.filter((c) => c !== code) : [...prev, code]));
+  function toggleCourse(id) {
+    setSelectedCourses((prev) => (prev.includes(id) ? prev.filter((c) => c !== id) : [...prev, id]));
   }
 
   function toggleAllCourses() {
-    setSelectedCourses((prev) => (prev.length === courses.length ? [] : courses.map((c) => c.code)));
+    setSelectedCourses((prev) => (prev.length === courses.length ? [] : courses.map((c) => c.id)));
+  }
+
+  // สร้างไฟล์จริงแล้วดาวน์โหลด
+  function runExport(job) {
+    const type = dataTypes.find((d) => d.id === job.typeId);
+    const fmt = formats.find((f) => f.id === job.format);
+    const rows = buildRows(job.typeId, job.classIds, job.dateFrom, job.dateTo);
+    const title = `${type.title} (${thaiDate(job.dateFrom)} - ${thaiDate(job.dateTo)})`;
+    let blob = null;
+    if (fmt.id === "csv") blob = toCsv(type.fields, rows);
+    else if (fmt.id === "excel") blob = toExcel(title, type.fields, rows);
+    else if (fmt.id === "json") {
+      const objects = rows.map((r) => Object.fromEntries(type.fields.map((f, i) => [f, r[i]])));
+      blob = new Blob([JSON.stringify(objects, null, 2)], { type: "application/json" });
+    } else printTable(title, type.fields, rows);
+    if (blob) downloadBlob(job.name, blob);
+    return blob ? blob.size : null;
   }
 
   function handleExport() {
     if (status === "working") return;
+    setExportError("");
     setStatus("working");
-    setTimeout(() => {
-      const newFile = {
-        id: Date.now(),
-        name: `${activeType.title.replace(/\s+/g, "")}_${selectedCourses.length === courses.length ? "all" : selectedCourses.join("-")}${activeFormat.ext}`,
-        typeId: selectedType,
-        format: selectedFormat,
-        date: "เมื่อสักครู่",
-        size: `${Math.max(12, Math.round(estimatedRows * 0.4))} KB`,
-      };
-      setHistory((prev) => [newFile, ...prev]);
+    const scope =
+      selectedCourses.length === courses.length
+        ? "all"
+        : courses.filter((c) => selectedCourses.includes(c.id)).map((c) => c.code).join("-");
+    const job = {
+      id: crypto.randomUUID(),
+      name: `${activeType.title.replace(/\s+/g, "")}_${scope}_${isoDate()}${activeFormat.ext}`,
+      typeId: selectedType,
+      format: selectedFormat,
+      classIds: selectedCourses,
+      dateFrom,
+      dateTo,
+      date: new Date().toLocaleString("th-TH", { dateStyle: "medium", timeStyle: "short" }),
+    };
+    try {
+      const size = runExport(job);
+      job.size = size == null ? "PDF" : `${Math.max(1, Math.round(size / 1024))} KB`;
+      const next = [job, ...history];
+      setHistory(next);
+      saveHistory(next);
       setStatus("done");
-      setTimeout(() => setStatus("idle"), 2000);
-    }, 1400);
+    } catch (err) {
+      setExportError(err.message);
+      setStatus("idle");
+      return;
+    }
+    setTimeout(() => setStatus("idle"), 2000);
   }
+
+  function redownload(job) {
+    setExportError("");
+    try {
+      runExport(job);
+    } catch (err) {
+      setExportError(err.message);
+    }
+  }
+
+
+
 
   return (
     <TeacherLayout titleIcon={Download} titleKey="nav.export" subtitleKey="export.subtitle">
+      <LoadState loading={loading} error={error || extra.error || exportError} onRetry={reload} />
       <div className="grid grid-cols-1 xl:grid-cols-[1fr_360px] gap-6 items-start">
         {/* ---------- Left column: steps + preview ---------- */}
         <div className="space-y-6 min-w-0">
@@ -190,11 +313,11 @@ export default function TeacherExportData() {
               </div>
               <div className="flex flex-wrap gap-2">
                 {courses.map((c) => {
-                  const checked = selectedCourses.includes(c.code);
+                  const checked = selectedCourses.includes(c.id);
                   return (
                     <button
-                      key={c.code}
-                      onClick={() => toggleCourse(c.code)}
+                      key={c.id}
+                      onClick={() => toggleCourse(c.id)}
                       className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-sm font-medium border transition-colors ${
                         checked
                           ? "bg-blue-50 dark:bg-blue-950/40 border-blue-200 dark:border-blue-900 text-blue-700 dark:text-blue-400"
@@ -284,7 +407,14 @@ export default function TeacherExportData() {
                 </tr>
               </thead>
               <tbody>
-                {previewRowsByType[selectedType].map((row, i) => (
+                {currentRows.length === 0 && (
+                  <tr>
+                    <td colSpan={activeType.fields.length} className="py-6 text-center text-sm text-slate-400 dark:text-slate-500">
+                      {t("history.noData")}
+                    </td>
+                  </tr>
+                )}
+                {currentRows.slice(0, 5).map((row, i) => (
                   <tr key={i} className="border-b border-slate-50 dark:border-slate-800/60 last:border-0">
                     {row.map((cell, j) => (
                       <td key={j} className="py-3 pr-3 text-slate-600 dark:text-slate-300 whitespace-nowrap">
@@ -370,11 +500,19 @@ export default function TeacherExportData() {
                 <Clock3 className="w-5 h-5 text-slate-700 dark:text-slate-300" />
                 <h3 className="font-bold text-slate-900 dark:text-slate-100">{t("export.historyTitle")}</h3>
               </div>
-              <button className="text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-300 transition-colors">
+              <button
+                onClick={() => {
+                  setHistory([]);
+                  saveHistory([]);
+                }}
+                title={t("live.clearHistory")}
+                className="text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-300 transition-colors"
+              >
                 <RefreshCcw className="w-4 h-4" />
               </button>
             </div>
             <div className="space-y-3 max-h-96 overflow-y-auto pr-1">
+              {history.length === 0 && <div className="text-sm text-slate-400 dark:text-slate-500">{t("live.noExportHistory")}</div>}
               {history.map((h) => {
                 const fIcon = formatIconFor(h.format);
                 return (
@@ -388,7 +526,7 @@ export default function TeacherExportData() {
                         {t(`export.dataTypes.${h.typeId}.title`)} · {h.date} · {h.size}
                       </div>
                     </div>
-                    <button className="text-xs font-semibold text-blue-600 dark:text-blue-400 hover:underline shrink-0">
+                    <button onClick={() => redownload(h)} className="text-xs font-semibold text-blue-600 dark:text-blue-400 hover:underline shrink-0">
                       {t("export.download")}
                     </button>
                   </div>

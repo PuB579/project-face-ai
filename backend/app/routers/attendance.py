@@ -3,6 +3,7 @@ import datetime as dt
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, status
 from sqlalchemy.orm import Session
 
+from app.attendance_utils import checkin_window, effective_status, late_minutes
 from app.database import get_db
 from app.deps import get_current_user, require_student, require_teacher
 from app.face_service import (
@@ -20,12 +21,15 @@ from app.models import (
     AttendanceSession,
     AttendanceStatus,
     Class,
+    Course,
     Enrollment,
+    EnrollmentStatus,
     ApprovalStatus,
     User,
 )
 from app.schemas import (
     AttendanceDetailOut,
+    AttendanceRecordOut,
     AttendanceSessionCreate,
     AttendanceSessionOut,
     AttendanceSummary,
@@ -77,26 +81,17 @@ def get_today_session(class_id: int, db: Session = Depends(get_db)):
     return session
 
 
-def _checkin_window(
-    session: AttendanceSession, class_: Class
-) -> tuple[dt.datetime | None, dt.datetime | None]:
-    """ช่วงเวลาที่เปิดให้เช็คชื่อ: [start - open_offset, start + close_offset] ไม่เกิน end_time"""
-    if session.start_time is None:
-        return None, None
-    start_dt = dt.datetime.combine(session.session_date, session.start_time)
-    open_dt = start_dt - dt.timedelta(minutes=class_.checkin_open_offset_minutes)
-    close_dt = start_dt + dt.timedelta(minutes=class_.checkin_close_offset_minutes)
-    if session.end_time is not None:
-        close_dt = min(close_dt, dt.datetime.combine(session.session_date, session.end_time))
-    return open_dt, close_dt
-
-
 @router.get("/my-sessions", response_model=list[MySessionOut])
 def my_sessions_today(
+    start: dt.date | None = None,
+    end: dt.date | None = None,
     current_user: User = Depends(require_student),
     db: Session = Depends(get_db),
 ):
-    """คาบเรียนวันนี้ของทุกคลาสที่นักศึกษาลงทะเบียนไว้"""
+    """
+    คาบเรียนของทุกคลาสที่นักศึกษาลงทะเบียนไว้ ในช่วงวันที่ [start, end]
+    (ไม่ระบุ = เฉพาะวันนี้) พร้อมสถานะที่แท้จริงของตัวเองในแต่ละคาบ
+    """
     student = current_user.student_profile
     if student is None:
         raise HTTPException(status_code=404, detail="ไม่พบโปรไฟล์นักศึกษาของบัญชีนี้")
@@ -106,13 +101,16 @@ def my_sessions_today(
     if not enrollment_by_class:
         return []
 
+    start = start or now.date()
+    end = end or start
     sessions = (
         db.query(AttendanceSession)
         .filter(
             AttendanceSession.class_id.in_(enrollment_by_class.keys()),
-            AttendanceSession.session_date == now.date(),
+            AttendanceSession.session_date >= start,
+            AttendanceSession.session_date <= end,
         )
-        .order_by(AttendanceSession.start_time)
+        .order_by(AttendanceSession.session_date, AttendanceSession.start_time)
         .all()
     )
 
@@ -124,7 +122,7 @@ def my_sessions_today(
         detail = next(
             (d for d in session.attendance_details if d.enrollment_id == enrollment.id), None
         )
-        open_dt, close_dt = _checkin_window(session, class_)
+        open_dt, close_dt = checkin_window(session, class_)
         is_open = (open_dt is None or open_dt <= now) and (close_dt is None or now <= close_dt)
         result.append(
             MySessionOut(
@@ -142,6 +140,11 @@ def my_sessions_today(
                 is_open=is_open,
                 my_status=detail.status if detail else None,
                 my_check_in_time=detail.check_in_time if detail else None,
+                my_method=detail.method if detail else None,
+                my_confidence=detail.confidence if detail else None,
+                late_minutes=late_minutes(session, detail.check_in_time) if detail else None,
+                late_threshold_minutes=class_.late_threshold_minutes,
+                status=effective_status(session, class_, detail, now),
             )
         )
     return result
@@ -196,7 +199,7 @@ async def checkin_with_face(
     now = dt.datetime.now().replace(microsecond=0)
     if session.session_date != now.date():
         raise HTTPException(status_code=400, detail="คาบเรียนนี้ไม่ใช่ของวันนี้ ไม่สามารถเช็คชื่อได้")
-    open_dt, close_dt = _checkin_window(session, class_)
+    open_dt, close_dt = checkin_window(session, class_)
     if open_dt is not None and now < open_dt:
         raise HTTPException(
             status_code=400,
@@ -381,6 +384,70 @@ def class_attendance(
 
     details = query.order_by(AttendanceDetail.created_at.desc()).all()
     return [_to_detail_out(d) for d in details]
+
+
+@router.get("/records", response_model=list[AttendanceRecordOut])
+def attendance_records(
+    class_id: int | None = None,
+    start: dt.date | None = None,
+    end: dt.date | None = None,
+    current_user: User = Depends(require_teacher),
+    db: Session = Depends(get_db),
+):
+    """
+    ทุกแถว (คาบ x นักศึกษาที่ลงทะเบียน) ของคลาสที่ระบุ หรือของทุกคลาสที่อาจารย์คนนี้สอน
+    รวมคนที่ไม่ได้เช็คชื่อด้วย (สถานะอนุมานเป็น absent / open / upcoming)
+    """
+    query = db.query(AttendanceSession).join(Class, AttendanceSession.class_id == Class.id)
+    if class_id is not None:
+        query = query.filter(AttendanceSession.class_id == class_id)
+    else:
+        teacher = current_user.teacher_profile
+        query = query.join(Course, Class.course_id == Course.id).filter(
+            Course.teacher_id == (teacher.id if teacher else -1)
+        )
+    if start is not None:
+        query = query.filter(AttendanceSession.session_date >= start)
+    if end is not None:
+        query = query.filter(AttendanceSession.session_date <= end)
+    sessions = query.order_by(
+        AttendanceSession.session_date.desc(), AttendanceSession.start_time.desc()
+    ).all()
+
+    now = dt.datetime.now().replace(microsecond=0)
+    rows: list[AttendanceRecordOut] = []
+    for session in sessions:
+        class_ = session.class_
+        course = class_.course
+        details = {d.enrollment_id: d for d in session.attendance_details}
+        for enrollment in class_.enrollments:
+            detail = details.get(enrollment.id)
+            # คนที่ถอนแล้วและไม่มีประวัติในคาบนี้ ไม่ต้องแสดง
+            if detail is None and enrollment.status == EnrollmentStatus.withdrawn:
+                continue
+            student = enrollment.student
+            rows.append(
+                AttendanceRecordOut(
+                    session_id=session.id,
+                    session_date=session.session_date,
+                    start_time=session.start_time,
+                    end_time=session.end_time,
+                    class_id=class_.id,
+                    class_code=class_.class_code,
+                    course_code=course.course_code,
+                    course_name=course.course_name,
+                    enrollment_id=enrollment.id,
+                    student_id=student.id,
+                    student_code=student.student_code,
+                    student_name=student.full_name,
+                    status=effective_status(session, class_, detail, now),
+                    method=detail.method if detail else None,
+                    check_in_time=detail.check_in_time if detail else None,
+                    confidence=detail.confidence if detail else None,
+                    late_minutes=late_minutes(session, detail.check_in_time) if detail else None,
+                )
+            )
+    return rows
 
 
 @router.get("/summary/{class_id}", response_model=AttendanceSummary)

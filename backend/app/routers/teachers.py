@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.deps import get_current_user, require_teacher
 from app.models import Teacher, User, UserRole
-from app.schemas import TeacherCreate, TeacherOut, TeacherUpdate
+from app.schemas import TeacherCreate, TeacherOut, TeacherSelfUpdate, TeacherUpdate
 from app.security import hash_password
 
 router = APIRouter(prefix="/teachers", tags=["teachers"])
@@ -22,6 +22,7 @@ def to_teacher_out(teacher: Teacher) -> TeacherOut:
         department_id=teacher.department_id,
         position=teacher.position,
         phone=teacher.phone,
+        department_name=teacher.department.name if teacher.department else None,
         created_at=teacher.created_at,
     )
 
@@ -77,6 +78,24 @@ def get_my_teacher_profile(
     if current_user.role != UserRole.teacher or current_user.teacher_profile is None:
         raise HTTPException(status_code=404, detail="บัญชีนี้ไม่ใช่อาจารย์")
     return to_teacher_out(current_user.teacher_profile)
+
+
+@router.put("/me", response_model=TeacherOut)
+def update_my_teacher_profile(
+    payload: TeacherSelfUpdate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    teacher = current_user.teacher_profile
+    if current_user.role != UserRole.teacher or teacher is None:
+        raise HTTPException(status_code=404, detail="บัญชีนี้ไม่ใช่อาจารย์")
+    for key, value in payload.model_dump(exclude_unset=True).items():
+        if key in ("first_name", "last_name") and not (value or "").strip():
+            raise HTTPException(status_code=400, detail="ชื่อและนามสกุลห้ามว่าง")
+        setattr(teacher, key, value)
+    db.commit()
+    db.refresh(teacher)
+    return to_teacher_out(teacher)
 
 
 @router.get("/{teacher_id}", response_model=TeacherOut)

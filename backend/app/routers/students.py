@@ -4,13 +4,24 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.deps import get_current_user, require_teacher
 from app.models import Student, User, UserRole
-from app.schemas import StudentCreate, StudentOut, StudentUpdate
+from app.schemas import StudentCreate, StudentOut, StudentSelfUpdate, StudentUpdate
 from app.security import hash_password
 
 router = APIRouter(prefix="/students", tags=["students"])
 
 
+def _latest_face(student: Student) -> tuple[str, int | None]:
+    """สถานะใบหน้าล่าสุดของนักศึกษา: none / pending / approved / rejected"""
+    if not student.face_profiles:
+        return "none", None
+    latest = max(student.face_profiles, key=lambda fp: fp.id)
+    if not latest.approvals:
+        return "pending", latest.id
+    return latest.approvals[-1].status.value, latest.id
+
+
 def to_student_out(student: Student) -> StudentOut:
+    face_status, face_profile_id = _latest_face(student)
     return StudentOut(
         id=student.id,
         user_id=student.user_id,
@@ -23,6 +34,9 @@ def to_student_out(student: Student) -> StudentOut:
         major=student.major,
         phone=student.phone,
         has_approved_face=student.has_approved_face,
+        face_status=face_status,
+        face_profile_id=face_profile_id,
+        is_active=student.user.is_active,
         created_at=student.created_at,
     )
 
@@ -83,6 +97,22 @@ def get_my_student_profile(
     return to_student_out(current_user.student_profile)
 
 
+@router.put("/me", response_model=StudentOut)
+def update_my_student_profile(
+    payload: StudentSelfUpdate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    student = current_user.student_profile
+    if current_user.role != UserRole.student or student is None:
+        raise HTTPException(status_code=404, detail="บัญชีนี้ไม่ใช่นักศึกษา")
+    for key, value in payload.model_dump(exclude_unset=True).items():
+        setattr(student, key, value)
+    db.commit()
+    db.refresh(student)
+    return to_student_out(student)
+
+
 @router.get("/{student_id}", response_model=StudentOut)
 def get_student(
     student_id: int,
@@ -105,7 +135,11 @@ def update_student(
     student = db.query(Student).filter(Student.id == student_id).first()
     if student is None:
         raise HTTPException(status_code=404, detail="ไม่พบนักศึกษานี้")
-    for key, value in payload.model_dump(exclude_unset=True).items():
+    data = payload.model_dump(exclude_unset=True)
+    # is_active อยู่ที่ตาราง users ไม่ใช่ students
+    if "is_active" in data:
+        student.user.is_active = bool(data.pop("is_active"))
+    for key, value in data.items():
         setattr(student, key, value)
     db.commit()
     db.refresh(student)

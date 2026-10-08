@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import { useState } from "react";
 import { Link } from "react-router-dom";
 import {
   Home,
@@ -23,6 +23,58 @@ import {
   MapPin,
 } from "lucide-react";
 import logoImg from "../../assets/logo-cs.png";
+import { getUser } from "../../lib/api";
+import { useApi } from "../../lib/useApi";
+import { addDays, countStatus, hhmm, initial, isoDate, parseDate, thaiDate, timeRange } from "../../lib/format";
+
+const COLORS = ["blue", "purple", "emerald", "amber", "rose"];
+const STATUS_TEXT = { present: "เข้าเรียน", late: "มาสาย", absent: "ขาดเรียน", open: "รอเช็คชื่อ", upcoming: "ยังไม่ถึงเวลา" };
+
+// วันจันทร์ของสัปดาห์ที่มีวันที่ d
+function mondayOf(d) {
+  const out = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  out.setDate(out.getDate() - ((out.getDay() + 6) % 7));
+  return out;
+}
+
+const toMinutes = (t) => {
+  const [h, m] = t.split(":").map(Number);
+  return h * 60 + m;
+};
+
+// จัดคาบเรียนของสัปดาห์ลงตาราง (แถวละ 1 ชั่วโมง)
+function buildGrid(sessions, weekStart) {
+  const hours = sessions.filter((s) => s.start_time).map((s) => Number(s.start_time.slice(0, 2)));
+  const endHours = sessions
+    .filter((s) => s.end_time)
+    .map((s) => Math.ceil(toMinutes(s.end_time) / 60));
+  const firstHour = Math.min(8, ...hours);
+  const lastHour = Math.max(17, ...endHours, ...hours.map((h) => h + 1));
+  const timeSlots = [];
+  for (let h = firstHour; h < lastHour; h++) {
+    timeSlots.push(`${String(h).padStart(2, "0")}:00 - ${String(h + 1).padStart(2, "0")}:00`);
+  }
+
+  const occupied = {};
+  const startAt = {};
+  sessions.forEach((s) => {
+    if (!s.start_time) return;
+    const day = Math.round((parseDate(s.session_date) - weekStart) / 86400000);
+    const row = Number(s.start_time.slice(0, 2)) - firstHour;
+    const span = s.end_time
+      ? Math.max(1, Math.ceil((toMinutes(s.end_time) - (firstHour + row) * 60) / 60))
+      : 1;
+    const key = `${day}-${row}`;
+    if (occupied[key]) return; // ซ้อนกับคาบที่แสดงอยู่แล้ว
+    if (startAt[key]) {
+      startAt[key].items.push(s);
+      return;
+    }
+    startAt[key] = { items: [s], span };
+    for (let r = row + 1; r < row + span; r++) occupied[`${day}-${r}`] = true;
+  });
+  return { timeSlots, occupied, startAt };
+}
 
 const navItems = [
   { icon: Home, label: "หน้าหลัก", to: "/dashboard" },
@@ -37,18 +89,6 @@ const navItems = [
 ];
 
 const days = ["จันทร์", "อังคาร", "พุธ", "พฤหัสบดี", "ศุกร์", "เสาร์", "อาทิตย์"];
-const timeSlots = [
-  "08:00 - 09:00",
-  "09:00 - 10:00",
-  "10:00 - 11:00",
-  "11:00 - 12:00",
-  "12:00 - 13:00",
-  "13:00 - 14:00",
-  "14:00 - 15:00",
-  "15:00 - 16:00",
-  "16:00 - 17:00",
-];
-
 const colorMap = {
   blue: { dot: "bg-blue-500", bg: "bg-blue-50", border: "border-blue-400", text: "text-blue-700" },
   purple: { dot: "bg-purple-500", bg: "bg-purple-50", border: "border-purple-400", text: "text-purple-700" },
@@ -57,52 +97,28 @@ const colorMap = {
   rose: { dot: "bg-rose-500", bg: "bg-rose-50", border: "border-rose-400", text: "text-rose-700" },
 };
 
-// day: index into `days` (0 = Monday), startRow/span: index into `timeSlots`
-const classes = [
-  { code: "CS-201", name: "โครงสร้างข้อมูล", room: "CS-201", day: 0, startRow: 0, span: 2, color: "blue" },
-  { code: "CS-203", name: "ฐานข้อมูล", room: "CS-203", day: 3, startRow: 0, span: 2, color: "emerald" },
-  { code: "CS-202", name: "การเขียนโปรแกรมเชิงวัตถุ", room: "CS-202", day: 1, startRow: 2, span: 2, color: "purple" },
-  { code: "CS-204", name: "ระบบปฏิบัติการ", room: "CS-204", day: 4, startRow: 2, span: 2, color: "amber" },
-  { code: "CS-205", name: "ปัญญาประดิษฐ์เบื้องต้น", room: "Lab 1", day: 0, startRow: 5, span: 2, color: "rose" },
-];
-
-const todaySchedule = [
-  {
-    time: "08:00 - 10:00",
-    code: "CS-201",
-    name: "โครงสร้างข้อมูลและอัลกอริทึม",
-    room: "CS-201",
-    color: "blue",
-  },
-  {
-    time: "10:00 - 12:00",
-    code: "CS-202",
-    name: "การเขียนโปรแกรมเชิงวัตถุ",
-    room: "CS-202",
-    color: "purple",
-  },
-];
-
-// build a lookup so we know which cells to render, skip, or leave empty
-function buildGrid() {
-  const occupied = {}; // `${day}-${row}` -> true if part of a span (not the start)
-  const startAt = {}; // `${day}-${row}` -> class object
-
-  classes.forEach((c) => {
-    startAt[`${c.day}-${c.startRow}`] = c;
-    for (let r = c.startRow + 1; r < c.startRow + c.span; r++) {
-      occupied[`${c.day}-${r}`] = true;
-    }
-  });
-
-  return { occupied, startAt };
-}
-
 export default function Schedule() {
+  const user = getUser();
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [view, setView] = useState("week");
-  const { occupied, startAt } = buildGrid();
+  const [weekStart, setWeekStart] = useState(() => mondayOf(new Date()));
+  const [today] = useState(() => isoDate());
+  const weekEnd = addDays(weekStart, 6);
+  const weekReq = useApi(`/attendance/my-sessions?start=${isoDate(weekStart)}&end=${isoDate(weekEnd)}`, []);
+  const todayReq = useApi(`/attendance/my-sessions?start=${today}&end=${today}`, []);
+  const allReq = useApi(`/attendance/my-sessions?start=2000-01-01&end=${today}`, []);
+  const classesReq = useApi("/classes/mine", []);
 
+  // สีประจำวิชา ตามลำดับคลาสที่ลงทะเบียน
+  const colorOfClass = new Map((classesReq.data || []).map((c, i) => [c.id, COLORS[i % COLORS.length]]));
+  const colorOf = (classId) => colorOfClass.get(classId) || "blue";
+
+  const weekSessions = weekReq.data || [];
+  const { timeSlots, occupied, startAt } = buildGrid(weekSessions, weekStart);
+  const legend = [...new Map(weekSessions.map((s) => [s.class_id, s])).values()];
+  const stats = countStatus(allReq.data || []);
+  const todaySchedule = todayReq.data || [];
+  const loadError = weekReq.error || todayReq.error || allReq.error;
   return (
     <div className="min-h-screen w-full bg-slate-50 font-sans flex">
       {/* ---------- Sidebar ---------- */}
@@ -198,20 +214,15 @@ export default function Schedule() {
 
           <button className="relative w-10 h-10 flex items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100 transition-colors shrink-0">
             <Bell className="w-5 h-5" />
-            <span className="absolute top-1.5 right-1.5 w-4 h-4 rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center">
-              3
-            </span>
           </button>
 
           <button className="flex items-center gap-2.5 pl-2 shrink-0">
-            <img
-              src="https://images.unsplash.com/photo-1633332755192-727a05c4013d?w=100&h=100&fit=crop&crop=faces"
-              alt="นายกฤษฎา ใจดี"
-              className="w-10 h-10 rounded-full object-cover"
-            />
+            <div className="w-10 h-10 rounded-full bg-blue-600 text-white flex items-center justify-center text-sm font-bold">
+              {initial(user?.full_name)}
+            </div>
             <div className="text-left hidden sm:block">
               <div className="text-sm font-semibold text-slate-800 whitespace-nowrap">
-                นายกฤษฎา ใจดี
+                {user?.full_name || "-"}
               </div>
               <div className="text-xs text-slate-400 whitespace-nowrap">นักศึกษา</div>
             </div>
@@ -230,15 +241,32 @@ export default function Schedule() {
               <div>
                 <h1 className="text-2xl font-bold text-slate-900">ตารางเรียน</h1>
                 <p className="text-sm text-slate-500 mt-0.5">
-                  ตารางเรียนของคุณ ประจำภาคเรียน 1/2568
+                  คาบเรียนที่อาจารย์เปิดเช็คชื่อ สัปดาห์ {thaiDate(isoDate(weekStart))} - {thaiDate(isoDate(weekEnd))}
                 </p>
+                {loadError && <p className="text-sm text-red-500 mt-1">{loadError}</p>}
               </div>
             </div>
 
-            <select className="border border-slate-200 rounded-xl px-4 py-2.5 text-sm text-slate-600 font-medium focus:outline-none focus:ring-2 focus:ring-blue-200 bg-white self-start lg:self-auto">
-              <option>ภาคเรียน 1/2568</option>
-              <option>ภาคเรียน 2/2567</option>
-            </select>
+            <div className="flex items-center gap-2 self-start lg:self-auto">
+              <button
+                onClick={() => setWeekStart(addDays(weekStart, -7))}
+                className="border border-slate-200 bg-white rounded-xl px-3 py-2.5 text-sm text-slate-600 font-medium hover:bg-slate-50"
+              >
+                ← สัปดาห์ก่อน
+              </button>
+              <button
+                onClick={() => setWeekStart(mondayOf(new Date()))}
+                className="border border-slate-200 bg-white rounded-xl px-3 py-2.5 text-sm text-slate-600 font-medium hover:bg-slate-50"
+              >
+                สัปดาห์นี้
+              </button>
+              <button
+                onClick={() => setWeekStart(addDays(weekStart, 7))}
+                className="border border-slate-200 bg-white rounded-xl px-3 py-2.5 text-sm text-slate-600 font-medium hover:bg-slate-50"
+              >
+                สัปดาห์ถัดไป →
+              </button>
+            </div>
           </div>
 
           {/* View toggle */}
@@ -278,14 +306,18 @@ export default function Schedule() {
                         <th className="w-24 text-xs font-semibold text-slate-500 pb-3 text-left">
                           เวลา
                         </th>
-                        {days.map((d) => (
-                          <th
-                            key={d}
-                            className="text-xs font-semibold text-slate-500 pb-3 px-1 text-center"
-                          >
-                            {d}
-                          </th>
-                        ))}
+                        {days.map((d, i) => {
+                          const date = isoDate(addDays(weekStart, i));
+                          return (
+                            <th
+                              key={d}
+                              className={`text-xs font-semibold pb-3 px-1 text-center ${date === today ? "text-blue-600" : "text-slate-500"}`}
+                            >
+                              {d}
+                              <div className="font-normal text-[11px] text-slate-400">{thaiDate(date, { day: "numeric", month: "short" })}</div>
+                            </th>
+                          );
+                        })}
                       </tr>
                     </thead>
                     <tbody>
@@ -297,30 +329,29 @@ export default function Schedule() {
                           {days.map((_, day) => {
                             const key = `${day}-${row}`;
                             if (occupied[key]) return null; // covered by a rowSpan above
-                            const cls = startAt[key];
-                            if (cls) {
-                              const cs = colorMap[cls.color];
+                            const cell = startAt[key];
+                            if (cell) {
                               return (
-                                <td
-                                  key={key}
-                                  rowSpan={cls.span}
-                                  className="align-top p-1"
-                                >
-                                  <div
-                                    className={`h-full rounded-xl border-l-4 ${cs.border} ${cs.bg} px-3 py-2`}
-                                  >
-                                    <div className="flex items-center gap-1.5">
-                                      <span className={`w-2 h-2 rounded-full ${cs.dot} shrink-0`} />
-                                      <span className={`text-xs font-bold ${cs.text}`}>
-                                        {cls.code}
-                                      </span>
-                                    </div>
-                                    <div className="text-xs text-slate-600 leading-snug mt-0.5">
-                                      {cls.name}
-                                    </div>
-                                    <div className="text-[11px] text-slate-400 mt-0.5">
-                                      ห้อง {cls.room}
-                                    </div>
+                                <td key={key} rowSpan={cell.span} className="align-top p-1">
+                                  <div className="space-y-1 h-full">
+                                    {cell.items.map((s) => {
+                                      const cs = colorMap[colorOf(s.class_id)];
+                                      return (
+                                        <div
+                                          key={s.session_id}
+                                          className={`h-full rounded-xl border-l-4 ${cs.border} ${cs.bg} px-3 py-2`}
+                                        >
+                                          <div className="flex items-center gap-1.5">
+                                            <span className={`w-2 h-2 rounded-full ${cs.dot} shrink-0`} />
+                                            <span className={`text-xs font-bold ${cs.text}`}>{s.course_code}</span>
+                                          </div>
+                                          <div className="text-xs text-slate-600 leading-snug mt-0.5">{s.course_name}</div>
+                                          <div className="text-[11px] text-slate-400 mt-0.5">
+                                            {timeRange(s.start_time, s.end_time)} • {STATUS_TEXT[s.status]}
+                                          </div>
+                                        </div>
+                                      );
+                                    })}
                                   </div>
                                 </td>
                               );
@@ -334,42 +365,43 @@ export default function Schedule() {
 
                   {/* Legend */}
                   <div className="flex flex-wrap items-center gap-x-6 gap-y-2 mt-5 pt-4 border-t border-slate-100">
-                    {classes
-                      .filter((c, i, arr) => arr.findIndex((x) => x.code === c.code) === i)
-                      .map((c) => (
-                        <span key={c.code} className="flex items-center gap-1.5 text-xs text-slate-600">
-                          <span className={`w-2.5 h-2.5 rounded-full ${colorMap[c.color].dot}`} />
-                          {c.code}
-                        </span>
-                      ))}
+                    {legend.length === 0 && (
+                      <span className="text-xs text-slate-400">
+                        {weekReq.loading ? "กำลังโหลด..." : "สัปดาห์นี้ยังไม่มีคาบเรียนที่เปิดเช็คชื่อ"}
+                      </span>
+                    )}
+                    {legend.map((s) => (
+                      <span key={s.class_id} className="flex items-center gap-1.5 text-xs text-slate-600">
+                        <span className={`w-2.5 h-2.5 rounded-full ${colorMap[colorOf(s.class_id)].dot}`} />
+                        {s.course_code} {s.course_name}
+                      </span>
+                    ))}
                   </div>
                 </>
               ) : (
                 <div className="space-y-3">
-                  {[...classes]
-                    .sort((a, b) => a.day - b.day || a.startRow - b.startRow)
-                    .map((c, i) => {
-                      const cs = colorMap[c.color];
-                      return (
-                        <div
-                          key={i}
-                          className={`flex items-center gap-4 rounded-xl border-l-4 ${cs.border} ${cs.bg} px-4 py-3`}
-                        >
-                          <div className="text-xs font-semibold text-slate-500 w-20 shrink-0">
-                            {days[c.day]}
-                          </div>
-                          <div className="text-xs text-slate-500 w-28 shrink-0">
-                            {timeSlots[c.startRow].split(" - ")[0]} -{" "}
-                            {timeSlots[c.startRow + c.span - 1].split(" - ")[1]}
-                          </div>
-                          <div className="min-w-0 flex-1">
-                            <span className={`text-sm font-bold ${cs.text}`}>{c.code}</span>{" "}
-                            <span className="text-sm text-slate-600">{c.name}</span>
-                          </div>
-                          <div className="text-xs text-slate-400 shrink-0">ห้อง {c.room}</div>
+                  {weekSessions.length === 0 && (
+                    <div className="text-sm text-slate-400">สัปดาห์นี้ยังไม่มีคาบเรียนที่เปิดเช็คชื่อ</div>
+                  )}
+                  {weekSessions.map((s) => {
+                    const cs = colorMap[colorOf(s.class_id)];
+                    return (
+                      <div
+                        key={s.session_id}
+                        className={`flex items-center gap-4 rounded-xl border-l-4 ${cs.border} ${cs.bg} px-4 py-3`}
+                      >
+                        <div className="text-xs font-semibold text-slate-500 w-24 shrink-0">
+                          {thaiDate(s.session_date, { weekday: "short", day: "numeric", month: "short" })}
                         </div>
-                      );
-                    })}
+                        <div className="text-xs text-slate-500 w-28 shrink-0">{timeRange(s.start_time, s.end_time)}</div>
+                        <div className="min-w-0 flex-1">
+                          <span className={`text-sm font-bold ${cs.text}`}>{s.course_code}</span>{" "}
+                          <span className="text-sm text-slate-600">{s.course_name}</span>
+                        </div>
+                        <div className="text-xs text-slate-400 shrink-0">{STATUS_TEXT[s.status]}</div>
+                      </div>
+                    );
+                  })}
                 </div>
               )}
             </div>
@@ -395,11 +427,11 @@ export default function Schedule() {
                         strokeWidth="10"
                         strokeLinecap="round"
                         strokeDasharray={2 * Math.PI * 52}
-                        strokeDashoffset={2 * Math.PI * 52 * (1 - 0.94)}
+                        strokeDashoffset={2 * Math.PI * 52 * (1 - stats.rate / 100)}
                       />
                     </svg>
                     <div className="absolute inset-0 flex flex-col items-center justify-center">
-                      <span className="text-xl font-bold text-slate-900">94%</span>
+                      <span className="text-xl font-bold text-slate-900">{Math.round(stats.rate)}%</span>
                       <span className="text-[10px] text-slate-400">อัตราเข้าเรียน</span>
                     </div>
                   </div>
@@ -407,17 +439,17 @@ export default function Schedule() {
                     <div className="flex items-center gap-2">
                       <span className="w-2.5 h-2.5 rounded-full bg-emerald-500" />
                       <span className="text-slate-600">เข้าเรียน</span>
-                      <span className="font-semibold text-slate-800 ml-auto">33 ครั้ง</span>
+                      <span className="font-semibold text-slate-800 ml-auto">{stats.present} ครั้ง</span>
                     </div>
                     <div className="flex items-center gap-2">
                       <span className="w-2.5 h-2.5 rounded-full bg-red-500" />
                       <span className="text-slate-600">ขาดเรียน</span>
-                      <span className="font-semibold text-slate-800 ml-auto">2 ครั้ง</span>
+                      <span className="font-semibold text-slate-800 ml-auto">{stats.absent} ครั้ง</span>
                     </div>
                     <div className="flex items-center gap-2">
                       <span className="w-2.5 h-2.5 rounded-full bg-blue-500" />
                       <span className="text-slate-600">สาย</span>
-                      <span className="font-semibold text-slate-800 ml-auto">1 ครั้ง</span>
+                      <span className="font-semibold text-slate-800 ml-auto">{stats.late} ครั้ง</span>
                     </div>
                   </div>
                 </div>
@@ -430,22 +462,24 @@ export default function Schedule() {
                   <h3 className="font-bold text-slate-900">ตารางเรียนวันนี้</h3>
                 </div>
                 <div className="space-y-3">
-                  {todaySchedule.map((t, i) => {
-                    const cs = colorMap[t.color];
+                  {todaySchedule.length === 0 && <div className="text-sm text-slate-400">วันนี้ไม่มีคาบเรียน</div>}
+                  {todaySchedule.map((s) => {
+                    const cs = colorMap[colorOf(s.class_id)];
                     return (
-                      <div key={i} className={`rounded-xl ${cs.bg} px-4 py-3`}>
+                      <div key={s.session_id} className={`rounded-xl ${cs.bg} px-4 py-3`}>
                         <div className="flex items-center gap-1.5 text-xs text-slate-500 mb-1">
                           <span className={`w-1.5 h-1.5 rounded-full ${cs.dot}`} />
-                          {t.time}
+                          {timeRange(s.start_time, s.end_time)}
                         </div>
                         <div className="flex items-center justify-between gap-2">
-                          <span className={`text-sm font-bold ${cs.text}`}>{t.code}</span>
+                          <span className={`text-sm font-bold ${cs.text}`}>{s.course_code}</span>
                           <span className="flex items-center gap-1 text-[11px] font-semibold bg-white text-slate-500 px-2 py-1 rounded-lg shrink-0">
                             <MapPin className="w-3 h-3" />
-                            ห้อง {t.room}
+                            {STATUS_TEXT[s.status]}
+                            {s.my_check_in_time ? ` ${hhmm(s.my_check_in_time)}` : ""}
                           </span>
                         </div>
-                        <div className="text-xs text-slate-500 mt-0.5">{t.name}</div>
+                        <div className="text-xs text-slate-500 mt-0.5">{s.course_name}</div>
                       </div>
                     );
                   })}

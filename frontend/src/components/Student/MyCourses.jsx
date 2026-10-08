@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import { useState } from "react";
 import { Link } from "react-router-dom";
 import {
   Home,
@@ -23,10 +23,15 @@ import {
   Cpu,
   Brain,
   MapPin,
-  MoreHorizontal,
   Info,
 } from "lucide-react";
 import logoImg from "../../assets/logo-cs.png";
+import { getUser } from "../../lib/api";
+import { useApi } from "../../lib/useApi";
+import { classPhase, countStatus, groupBy, hhmm, initial, isoDate, termLabel, thaiDate } from "../../lib/format";
+
+const COLORS = ["blue", "amber", "emerald", "purple", "sky", "rose"];
+const ICONS = [Code2, Database, Cpu, Brain, BarChart3];
 
 const navItems = [
   { icon: Home, label: "หน้าหลัก", to: "/dashboard" },
@@ -91,84 +96,42 @@ const colorMap = {
   },
 };
 
-const courses = [
-  {
-    code: "CS-201",
-    name: "โครงสร้างข้อมูลและอัลกอริทึม",
-    nameEn: "(Data Structures)",
-    teacher: "รศ. ดร.สมชาย รุ่งเรือง",
-    schedule: "จันทร์ 08:00 - 10:00",
-    room: "ห้อง CS-201",
-    attended: 28,
-    total: 30,
-    icon: Code2,
-    color: "blue",
-  },
-  {
-    code: "CS-202",
-    name: "การเขียนโปรแกรมเชิงวัตถุ",
-    nameEn: "(Object Oriented Programming)",
-    teacher: "ผศ. ดร.นฤมล พิพัฒน์",
-    schedule: "พุธ 13:00 - 15:00",
-    room: "ห้อง CS-202",
-    attended: 25,
-    total: 30,
-    iconLabel: "OOP",
-    color: "amber",
-  },
-  {
-    code: "CS-203",
-    name: "ฐานข้อมูล",
-    nameEn: "(Database Systems)",
-    teacher: "อ. วิชาญ ศรีเกษม",
-    schedule: "ศุกร์ 13:30 - 15:30",
-    room: "ห้อง CS-203",
-    attended: 29,
-    total: 30,
-    icon: Database,
-    color: "emerald",
-  },
-  {
-    code: "CS-204",
-    name: "ระบบปฏิบัติการ",
-    nameEn: "(Operating Systems)",
-    teacher: "อ. กิตติพงษ์ อินทร์แก้ว",
-    schedule: "อังคาร 09:00 - 11:00",
-    room: "ห้อง CS-204",
-    attended: 23,
-    total: 30,
-    icon: Cpu,
-    color: "purple",
-  },
-  {
-    code: "CS-205",
-    name: "ปัญญาประดิษฐ์เบื้องต้น",
-    nameEn: "(AI Introduction)",
-    teacher: "ผศ. ดร.จิราภา กุลจาติ",
-    schedule: "พฤหัสบดี 15:30 - 17:30",
-    room: "ห้อง CS-205",
-    attended: 28,
-    total: 30,
-    icon: Brain,
-    color: "sky",
-  },
-  {
-    code: "GE-101",
-    name: "ทักษะการเรียนรู้ในศตวรรษที่ 21",
-    nameEn: "(21st Century Learning Skills)",
-    teacher: "อ. อารีย์ วงศ์สวัสดิ์",
-    schedule: "ศุกร์ 09:00 - 11:00",
-    room: "ห้อง GE-101",
-    attended: 26,
-    total: 30,
-    icon: BarChart3,
-    color: "rose",
-  },
-];
-
 export default function MyCourses() {
+  const user = getUser();
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [today] = useState(() => isoDate());
+  const [term, setTerm] = useState("");
+  const [phase, setPhase] = useState("");
+  const [openId, setOpenId] = useState(null);
+  const classesReq = useApi("/classes/mine", []);
+  const sessionsReq = useApi(`/attendance/my-sessions?start=2000-01-01&end=${today}`, []);
+  const sessionsByClass = groupBy(sessionsReq.data || [], (s) => s.class_id);
 
+  const allCourses = (classesReq.data || []).map((c, i) => {
+    const sessions = sessionsByClass.get(c.id) || [];
+    const cnt = countStatus(sessions);
+    const last = sessions[sessions.length - 1];
+    return {
+      id: c.id,
+      code: c.course_code,
+      name: c.course_name,
+      nameEn: c.class_name && c.class_name !== c.course_name ? c.class_name : `${c.credit ?? "-"} หน่วยกิต`,
+      teacher: c.teacher_name || "-",
+      schedule: last ? `ล่าสุด ${thaiDate(last.session_date)} ${hhmm(last.start_time)}` : "ยังไม่มีคาบเรียน",
+      room: `กลุ่ม ${c.class_code || "-"}`,
+      term: termLabel(c),
+      phase: classPhase(c, today),
+      counts: cnt,
+      attended: cnt.present + cnt.late,
+      total: cnt.total,
+      icon: ICONS[i % ICONS.length],
+      color: COLORS[i % COLORS.length],
+    };
+  });
+  const terms = [...new Set(allCourses.map((c) => c.term))];
+  const courses = allCourses.filter((c) => (!term || c.term === term) && (!phase || c.phase === phase));
+  const overall = countStatus(courses.flatMap((c) => sessionsByClass.get(c.id) || []));
+  const loadError = classesReq.error || sessionsReq.error;
   return (
     <div className="min-h-screen w-full bg-slate-50 font-sans flex">
       {/* ---------- Sidebar ---------- */}
@@ -264,20 +227,15 @@ export default function MyCourses() {
 
           <button className="relative w-10 h-10 flex items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100 transition-colors shrink-0">
             <Bell className="w-5 h-5" />
-            <span className="absolute top-1.5 right-1.5 w-4 h-4 rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center">
-              3
-            </span>
           </button>
 
           <button className="flex items-center gap-2.5 pl-2 shrink-0">
-            <img
-              src="https://images.unsplash.com/photo-1633332755192-727a05c4013d?w=100&h=100&fit=crop&crop=faces"
-              alt="นายกฤษฎา ใจดี"
-              className="w-10 h-10 rounded-full object-cover"
-            />
+            <div className="w-10 h-10 rounded-full bg-blue-600 text-white flex items-center justify-center text-sm font-bold">
+              {initial(user?.full_name)}
+            </div>
             <div className="text-left hidden sm:block">
               <div className="text-sm font-semibold text-slate-800 whitespace-nowrap">
-                นายกฤษฎา ใจดี
+                {user?.full_name || "-"}
               </div>
               <div className="text-xs text-slate-400 whitespace-nowrap">นักศึกษา</div>
             </div>
@@ -294,18 +252,25 @@ export default function MyCourses() {
                 วิชาเรียนของฉัน
                 <BookOpen className="w-5 h-5 text-slate-400" />
               </h1>
-              <p className="text-sm text-slate-500 mt-1">ภาคเรียนที่ 1/2568</p>
+              <p className="text-sm text-slate-500 mt-1">
+                {term ? `ภาคเรียนที่ ${term}` : "ทุกภาคเรียน"}
+              </p>
+              {loadError && <p className="text-sm text-red-500 mt-1">{loadError}</p>}
             </div>
 
             <div className="flex items-center gap-3">
-              <select className="border border-slate-200 rounded-xl px-4 py-2.5 text-sm text-slate-600 font-medium focus:outline-none focus:ring-2 focus:ring-blue-200 bg-white">
-                <option>ภาคเรียน 1/2568</option>
-                <option>ภาคเรียน 2/2567</option>
+              <select value={term} onChange={(e) => setTerm(e.target.value)} className="border border-slate-200 rounded-xl px-4 py-2.5 text-sm text-slate-600 font-medium focus:outline-none focus:ring-2 focus:ring-blue-200 bg-white">
+                <option value="">ทุกภาคเรียน</option>
+                {terms.map((tm) => (
+                  <option key={tm} value={tm}>
+                    ภาคเรียน {tm}
+                  </option>
+                ))}
               </select>
-              <select className="border border-slate-200 rounded-xl px-4 py-2.5 text-sm text-slate-600 font-medium focus:outline-none focus:ring-2 focus:ring-blue-200 bg-white">
-                <option>ทั้งหมด</option>
-                <option>กำลังเรียน</option>
-                <option>เรียนจบแล้ว</option>
+              <select value={phase} onChange={(e) => setPhase(e.target.value)} className="border border-slate-200 rounded-xl px-4 py-2.5 text-sm text-slate-600 font-medium focus:outline-none focus:ring-2 focus:ring-blue-200 bg-white">
+                <option value="">ทั้งหมด</option>
+                <option value="teaching">กำลังเรียน</option>
+                <option value="ended">เรียนจบแล้ว</option>
               </select>
             </div>
           </div>
@@ -316,47 +281,44 @@ export default function MyCourses() {
               icon={<BookOpen className="w-6 h-6 text-blue-600" />}
               iconBg="bg-blue-100"
               label="รายวิชาทั้งหมด"
-              value="6"
+              value={courses.length}
               sub="วิชา"
             />
             <StatCard
               icon={<CheckCircle2 className="w-6 h-6 text-emerald-600" />}
               iconBg="bg-emerald-100"
-              label="เช็คชื่อครบ"
-              value="4"
+              label="เช็คชื่อครบ (ไม่ขาด)"
+              value={courses.filter((c) => c.total > 0 && c.counts.absent === 0).length}
               sub="วิชา"
             />
             <StatCard
               icon={<BarChart3 className="w-6 h-6 text-purple-600" />}
               iconBg="bg-purple-100"
               label="อัตราเข้าเรียนเฉลี่ย"
-              value="94.2%"
+              value={`${overall.rate.toFixed(1)}%`}
               sub="ของทั้งหมด"
             />
           </div>
 
           {/* Course cards */}
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
+            {!classesReq.loading && courses.length === 0 && (
+              <div className="text-sm text-slate-400">ยังไม่มีรายวิชาที่ลงทะเบียน</div>
+            )}
             {courses.map((c) => {
               const cs = colorMap[c.color];
-              const pct = Math.round((c.attended / c.total) * 100);
+              const pct = c.total ? Math.round((c.attended / c.total) * 100) : 0;
               const Icon = c.icon;
               return (
                 <div
-                  key={c.code}
+                  key={c.id}
                   className={`bg-white rounded-2xl border border-slate-100 border-l-4 ${cs.border} shadow-sm p-5 flex flex-col`}
                 >
                   <div className="flex items-start gap-3 mb-3">
                     <div
                       className={`w-11 h-11 rounded-xl flex items-center justify-center shrink-0 ${cs.iconBg}`}
                     >
-                      {c.iconLabel ? (
-                        <span className={`text-xs font-extrabold ${cs.iconText}`}>
-                          {c.iconLabel}
-                        </span>
-                      ) : (
-                        <Icon className={`w-5 h-5 ${cs.iconText}`} />
-                      )}
+                      <Icon className={`w-5 h-5 ${cs.iconText}`} />
                     </div>
                     <div className="min-w-0">
                       <div className={`font-bold text-sm ${cs.codeText}`}>{c.code}</div>
@@ -397,14 +359,13 @@ export default function MyCourses() {
                       />
                     </div>
 
+                    {openId === c.id && <CourseDetail course={c} />}
                     <div className="flex items-center gap-2">
                       <button
+                        onClick={() => setOpenId(openId === c.id ? null : c.id)}
                         className={`flex-1 text-sm font-semibold px-4 py-2.5 rounded-xl transition-colors ${cs.btn}`}
                       >
-                        ดูรายละเอียด
-                      </button>
-                      <button className="w-10 h-10 flex items-center justify-center rounded-xl border border-slate-200 text-slate-400 hover:bg-slate-50 transition-colors shrink-0">
-                        <MoreHorizontal className="w-4 h-4" />
+                        {openId === c.id ? "ซ่อนรายละเอียด" : "ดูรายละเอียด"}
                       </button>
                     </div>
                   </div>
@@ -423,6 +384,34 @@ export default function MyCourses() {
           © 2026 Computer Science AI Face Attendance System. All rights reserved.
         </footer>
       </div>
+    </div>
+  );
+}
+
+// รายละเอียดของวิชา: จำนวนแยกสถานะ + คะแนนเข้าเรียนที่อาจารย์บันทึกไว้
+function CourseDetail({ course }) {
+  const { data: score, loading } = useApi(`/scores/me/${course.id}`);
+  return (
+    <div className="mb-4 rounded-xl bg-slate-50 p-3 text-xs text-slate-600 space-y-1.5">
+      <div className="flex justify-between">
+        <span>ภาคเรียน</span>
+        <span className="font-semibold">{course.term}</span>
+      </div>
+      <div className="flex justify-between">
+        <span>ตรงเวลา / สาย / ขาด</span>
+        <span className="font-semibold">
+          {course.counts.present} / {course.counts.late} / {course.counts.absent}
+        </span>
+      </div>
+      <div className="flex justify-between">
+        <span>คะแนนเข้าเรียน</span>
+        <span className="font-semibold">
+          {loading ? "..." : score ? Number(score.score).toFixed(2) : "ยังไม่ประกาศ"}
+        </span>
+      </div>
+      <Link to="/history" className="block text-blue-600 font-semibold hover:underline pt-1">
+        ดูประวัติการเช็คชื่อ →
+      </Link>
     </div>
   );
 }

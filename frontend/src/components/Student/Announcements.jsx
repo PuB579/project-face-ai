@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import { useState } from "react";
 import { Link } from "react-router-dom";
 import {
   Home,
@@ -20,14 +20,25 @@ import {
   ShieldCheck,
   Pin,
   BookMarked,
-  Monitor,
   FileText,
   GraduationCap,
-  ClipboardList,
-  Sparkles,
-  Layers,
 } from "lucide-react";
 import logoImg from "../../assets/logo-cs.png";
+import { getUser } from "../../lib/api";
+import { useApi } from "../../lib/useApi";
+import { initial, thaiDate } from "../../lib/format";
+
+const READ_KEY = "faceattend_read_announcements";
+const PAGE_SIZE = 5;
+const COLORS = ["blue", "emerald", "amber", "purple"];
+
+function loadRead() {
+  try {
+    return new Set(JSON.parse(localStorage.getItem(READ_KEY)) || []);
+  } catch {
+    return new Set();
+  }
+}
 
 const navItems = [
   { icon: Home, label: "หน้าหลัก", to: "/dashboard" },
@@ -49,90 +60,74 @@ const colorMap = {
   purple: { bg: "bg-purple-100", text: "text-purple-600" },
 };
 
-const announcements = [
-  {
-    pinned: true,
-    icon: Megaphone,
-    color: "rose",
-    title: "สอบกลางภาควิชาโครงสร้างข้อมูลและอัลกอริทึม",
-    body: "กำหนดสอบวันที่ 15 กันยายน 2568 เวลา 09:00 - 12:00 น.\nณ ห้องสอบ CS-101 โปรดเตรียมบัตรนักศึกษาและอุปกรณ์ให้พร้อม",
-    teacher: "ผศ. ดร.สมชาย รุ่งเรือง",
-    subject: "โครงสร้างข้อมูลและอัลกอริทึม (CS-201)",
-    date: "12 ก.ย. 2568",
-    time: "09:15 น.",
-    read: false,
-  },
-  {
-    icon: BookMarked,
-    color: "blue",
-    title: "ส่งงาน Lab 3 ภายในวันที่ 25 กันยายน 2568",
-    body: "นักศึกษาทุกคนต้องส่งงานผ่านระบบออนไลน์ ก่อนเวลา 23:59 น.\nหากไม่ส่งจะหักคะแนน 10 คะแนน",
-    teacher: "ผศ. ดร.สมชาย รุ่งเรือง",
-    subject: "โครงสร้างข้อมูลและอัลกอริทึม (CS-201)",
-    date: "20 ก.ย. 2568",
-    time: "10:30 น.",
-    read: false,
-  },
-  {
-    icon: Monitor,
-    color: "emerald",
-    title: "เปลี่ยนห้องเรียนจาก CS-202 เป็น CS-301",
-    body: "ตั้งแต่สัปดาห์นี้เป็นต้นไป วิชาการเขียนโปรแกรมเว็บ\nจะเรียนที่ห้อง CS-301 ทุกวันพฤหัสบดี",
-    teacher: "อ. วิริยะ ศรีเกษม",
-    subject: "การเขียนโปรแกรมเว็บ (CS-203)",
-    date: "18 ก.ย. 2568",
-    time: "13:45 น.",
-    read: true,
-  },
-  {
-    icon: CalendarDays,
-    color: "amber",
-    title: "แจ้งกำหนดการนำเสนอ Project Final",
-    body: "นักศึกษานำเสนอผลงานในวันที่ 5 ตุลาคม 2568\nเวลา 13:00 - 16:00 น. ห้อง CS-405",
-    teacher: "ผศ. ดร.จิราภา กุลชาติ",
-    subject: "ปัญญาประดิษฐ์เบื้องต้น (CS-205)",
-    date: "17 ก.ย. 2568",
-    time: "09:00 น.",
-    read: true,
-  },
-  {
-    icon: FileText,
-    color: "purple",
-    title: "ประกาศคะแนนสอบปลายภาค",
-    body: "สามารถตรวจสอบคะแนนสอบปลายภาคได้แล้ว\nผ่านระบบตั้งแต่วันนี้เป็นต้นไป",
-    teacher: "อ. กิตติพงษ์ อินทร์แก้ว",
-    subject: "ระบบปฏิบัติการ (CS-204)",
-    date: "16 ก.ย. 2568",
-    time: "16:20 น.",
-    read: true,
-  },
-];
-
-const pinnedList = [
-  {
-    title: "สอบกลางภาควิชาโครงสร้างข้อมูลและอัลกอริทึม",
-    date: "15 ก.ย. 2568 เวลา 09:00 - 12:00 น.",
-    icon: Megaphone,
-  },
-  {
-    title: "ปิดระบบชั่วคราว",
-    date: "วันที่ 20 ก.ย. 2568 เวลา 00:00 - 02:00 น. เพื่อปรับปรุงระบบ",
-    icon: Layers,
-  },
-];
-
-const categories = [
-  { icon: GraduationCap, label: "การเรียนการสอน", count: 10 },
-  { icon: ClipboardList, label: "การสอบ", count: 3 },
-  { icon: Sparkles, label: "กิจกรรม", count: 2 },
-  { icon: FileText, label: "ทั่วไป", count: 3 },
-];
-
 export default function Announcements() {
+  const user = getUser();
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [page, setPage] = useState(1);
-  const totalPages = 5;
+  const [search, setSearch] = useState("");
+  const [readFilter, setReadFilter] = useState("");
+  const [classFilter, setClassFilter] = useState("");
+  const [expanded, setExpanded] = useState(null);
+  const [readIds, setReadIds] = useState(loadRead);
+  const announcementsReq = useApi("/announcements", []);
+  const classesReq = useApi("/classes/mine", []);
+  const classById = new Map((classesReq.data || []).map((c, i) => [c.id, { ...c, color: COLORS[i % COLORS.length] }]));
 
+  // สถานะ "อ่านแล้ว" เก็บไว้ในเบราว์เซอร์นี้
+  const markRead = (id) => {
+    setReadIds((prev) => {
+      const next = new Set(prev).add(id);
+      try {
+        localStorage.setItem(READ_KEY, JSON.stringify([...next]));
+      } catch {
+        // ignore
+      }
+      return next;
+    });
+  };
+
+  const all = (announcementsReq.data || []).map((a) => {
+    const cls = a.class_id ? classById.get(a.class_id) : null;
+    const created = new Date(a.created_at);
+    return {
+      ...a,
+      icon: a.pinned ? Megaphone : cls ? BookMarked : FileText,
+      color: a.pinned ? "rose" : cls?.color || "purple",
+      teacher: a.teacher_name || "-",
+      subject: cls ? `${cls.course_name} (${cls.course_code})` : "ประกาศทั่วไป",
+      date: thaiDate(a.created_at),
+      time: `${created.toTimeString().slice(0, 5)} น.`,
+      read: readIds.has(a.id),
+    };
+  });
+  const q = search.trim().toLowerCase();
+  const filtered = all.filter(
+    (a) =>
+      (!q || `${a.title} ${a.body}`.toLowerCase().includes(q)) &&
+      (!readFilter || (readFilter === "read") === a.read) &&
+      (!classFilter || String(a.class_id ?? "general") === classFilter)
+  );
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const currentPage = Math.min(page, totalPages);
+  const announcements = filtered.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
+  const pinnedList = all.filter((a) => a.pinned);
+  const categories = [
+    ...[...classById.values()].map((c) => ({
+      key: String(c.id),
+      icon: GraduationCap,
+      label: `${c.course_code} ${c.course_name}`,
+      count: all.filter((a) => a.class_id === c.id).length,
+    })),
+    { key: "general", icon: FileText, label: "ประกาศทั่วไป", count: all.filter((a) => !a.class_id).length },
+  ];
+  const resetPage = (fn) => (e) => {
+    fn(e.target.value);
+    setPage(1);
+  };
+  const toggleExpand = (a) => {
+    setExpanded(expanded === a.id ? null : a.id);
+    markRead(a.id);
+  };
   return (
     <div className="min-h-screen w-full bg-slate-50 font-sans flex">
       {/* ---------- Sidebar ---------- */}
@@ -228,20 +223,15 @@ export default function Announcements() {
 
           <button className="relative w-10 h-10 flex items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100 transition-colors shrink-0">
             <Bell className="w-5 h-5" />
-            <span className="absolute top-1.5 right-1.5 w-4 h-4 rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center">
-              3
-            </span>
           </button>
 
           <button className="flex items-center gap-2.5 pl-2 shrink-0">
-            <img
-              src="https://images.unsplash.com/photo-1633332755192-727a05c4013d?w=100&h=100&fit=crop&crop=faces"
-              alt="นายกฤษฎา ใจดี"
-              className="w-10 h-10 rounded-full object-cover"
-            />
+            <div className="w-10 h-10 rounded-full bg-blue-600 text-white flex items-center justify-center text-sm font-bold">
+              {initial(user?.full_name)}
+            </div>
             <div className="text-left hidden sm:block">
               <div className="text-sm font-semibold text-slate-800 whitespace-nowrap">
-                นายกฤษฎา ใจดี
+                {user?.full_name || "-"}
               </div>
               <div className="text-xs text-slate-400 whitespace-nowrap">นักศึกษา</div>
             </div>
@@ -271,32 +261,40 @@ export default function Announcements() {
                   <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
                   <input
                     type="text"
+                    value={search}
+                    onChange={resetPage(setSearch)}
                     placeholder="ค้นหาประกาศ..."
                     className="w-full pl-11 pr-4 py-2.5 rounded-xl border border-slate-200 text-sm text-slate-700 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-200"
                   />
                 </div>
-                <select className="border border-slate-200 rounded-xl px-4 py-2.5 text-sm text-slate-600 font-medium focus:outline-none focus:ring-2 focus:ring-blue-200 bg-white">
-                  <option>ทั้งหมด</option>
-                  <option>ยังไม่อ่าน</option>
-                  <option>อ่านแล้ว</option>
+                <select value={readFilter} onChange={resetPage(setReadFilter)} className="border border-slate-200 rounded-xl px-4 py-2.5 text-sm text-slate-600 font-medium focus:outline-none focus:ring-2 focus:ring-blue-200 bg-white">
+                  <option value="">ทั้งหมด</option>
+                  <option value="unread">ยังไม่อ่าน</option>
+                  <option value="read">อ่านแล้ว</option>
                 </select>
-                <select className="border border-slate-200 rounded-xl px-4 py-2.5 text-sm text-slate-600 font-medium focus:outline-none focus:ring-2 focus:ring-blue-200 bg-white">
-                  <option>ทุกรายวิชา</option>
-                  <option>CS-201</option>
-                  <option>CS-203</option>
-                  <option>CS-204</option>
-                  <option>CS-205</option>
+                <select value={classFilter} onChange={resetPage(setClassFilter)} className="border border-slate-200 rounded-xl px-4 py-2.5 text-sm text-slate-600 font-medium focus:outline-none focus:ring-2 focus:ring-blue-200 bg-white">
+                  <option value="">ทุกรายวิชา</option>
+                  {categories.map((c) => (
+                    <option key={c.key} value={c.key}>
+                      {c.label}
+                    </option>
+                  ))}
                 </select>
               </div>
 
               {/* Announcement list */}
               <div className="space-y-4">
-                {announcements.map((a, i) => {
+                {(announcementsReq.loading || announcementsReq.error || announcements.length === 0) && (
+                  <div className={`bg-white rounded-2xl border border-slate-100 p-8 text-center text-sm ${announcementsReq.error ? "text-red-500" : "text-slate-400"}`}>
+                    {announcementsReq.error || (announcementsReq.loading ? "กำลังโหลด..." : "ไม่มีประกาศ")}
+                  </div>
+                )}
+                {announcements.map((a) => {
                   const cs = colorMap[a.color];
                   const Icon = a.icon;
                   return (
                     <div
-                      key={i}
+                      key={a.id}
                       className={`rounded-2xl border shadow-sm p-5 ${
                         a.pinned
                           ? "bg-rose-50/60 border-rose-100"
@@ -328,17 +326,15 @@ export default function Announcements() {
                               {a.read ? "อ่านแล้ว" : "ยังไม่อ่าน"}
                             </span>
                           </div>
-                          <p className="text-sm text-slate-500 leading-relaxed mt-1 whitespace-pre-line">
+                          <p className={`text-sm text-slate-500 leading-relaxed mt-1 whitespace-pre-line ${expanded === a.id ? "" : "line-clamp-2"}`}>
                             {a.body}
                           </p>
 
                           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mt-4">
                             <div className="flex items-center gap-2 min-w-0">
-                              <img
-                                src={`https://images.unsplash.com/photo-1519085360753-af0119f7cbe7?w=60&h=60&fit=crop&crop=faces&sig=${i}`}
-                                alt=""
-                                className="w-6 h-6 rounded-full object-cover shrink-0"
-                              />
+                              <div className="w-6 h-6 rounded-full bg-slate-200 text-slate-600 text-[11px] font-bold flex items-center justify-center shrink-0">
+                                {initial(a.teacher)}
+                              </div>
                               <div className="min-w-0">
                                 <div className="text-xs font-medium text-slate-700 truncate">
                                   {a.teacher}
@@ -355,13 +351,14 @@ export default function Announcements() {
                                 {a.date} {a.time}
                               </span>
                               <button
+                                onClick={() => toggleExpand(a)}
                                 className={`text-xs font-semibold px-4 py-2 rounded-lg border transition-colors whitespace-nowrap ${
                                   a.pinned
                                     ? "border-rose-300 text-rose-600 hover:bg-rose-100"
                                     : "border-blue-200 text-blue-600 hover:bg-blue-50"
                                 }`}
                               >
-                                อ่านเพิ่มเติม
+                                {expanded === a.id ? "ย่อ" : "อ่านเพิ่มเติม"}
                               </button>
                             </div>
                           </div>
@@ -375,8 +372,8 @@ export default function Announcements() {
               {/* Pagination */}
               <div className="flex items-center justify-center gap-1.5 pt-2">
                 <button
-                  onClick={() => setPage((p) => Math.max(1, p - 1))}
-                  disabled={page === 1}
+                  onClick={() => setPage(Math.max(1, currentPage - 1))}
+                  disabled={currentPage === 1}
                   className="w-8 h-8 flex items-center justify-center rounded-lg border border-slate-200 text-slate-400 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
                 >
                   <ChevronLeft className="w-4 h-4" />
@@ -386,7 +383,7 @@ export default function Announcements() {
                     key={i}
                     onClick={() => setPage(i + 1)}
                     className={`w-8 h-8 flex items-center justify-center rounded-lg text-sm font-medium transition-colors ${
-                      page === i + 1
+                      currentPage === i + 1
                         ? "bg-blue-600 text-white"
                         : "border border-slate-200 text-slate-500 hover:bg-slate-50"
                     }`}
@@ -395,8 +392,8 @@ export default function Announcements() {
                   </button>
                 ))}
                 <button
-                  onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-                  disabled={page === totalPages}
+                  onClick={() => setPage(Math.min(totalPages, currentPage + 1))}
+                  disabled={currentPage === totalPages}
                   className="w-8 h-8 flex items-center justify-center rounded-lg border border-slate-200 text-slate-400 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
                 >
                   <ChevronRight className="w-4 h-4" />
@@ -410,10 +407,10 @@ export default function Announcements() {
               <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-6">
                 <h3 className="font-bold text-slate-900 mb-4">สรุปประกาศ</h3>
                 <div className="divide-y divide-slate-100">
-                  <SummaryRow label="ทั้งหมด" value="18" />
-                  <SummaryRow label="ยังไม่อ่าน" value="5" valueColor="text-rose-500" />
-                  <SummaryRow label="ประกาศสำคัญ" value="2" valueColor="text-rose-500" />
-                  <SummaryRow label="ประกาศทั่วไป" value="16" />
+                  <SummaryRow label="ทั้งหมด" value={all.length} />
+                  <SummaryRow label="ยังไม่อ่าน" value={all.filter((a) => !a.read).length} valueColor="text-rose-500" />
+                  <SummaryRow label="ประกาศสำคัญ" value={pinnedList.length} valueColor="text-rose-500" />
+                  <SummaryRow label="ประกาศทั่วไป" value={all.length - pinnedList.length} />
                 </div>
               </div>
 
@@ -424,10 +421,11 @@ export default function Announcements() {
                   <h3 className="font-bold text-slate-900">ประกาศปักหมุด</h3>
                 </div>
                 <div className="space-y-3">
-                  {pinnedList.map((p, i) => {
+                  {pinnedList.length === 0 && <div className="text-sm text-slate-400">ไม่มีประกาศปักหมุด</div>}
+                  {pinnedList.map((p) => {
                     const Icon = p.icon;
                     return (
-                      <div key={i} className="bg-rose-50 border border-rose-100 rounded-xl p-4">
+                      <div key={p.id} className="bg-rose-50 border border-rose-100 rounded-xl p-4">
                         <div className="flex items-center gap-1.5 text-rose-500 text-xs font-semibold mb-1.5">
                           <Icon className="w-3.5 h-3.5" />
                           สำคัญ
@@ -435,8 +433,20 @@ export default function Announcements() {
                         <div className="text-sm font-bold text-slate-900 leading-snug">
                           {p.title}
                         </div>
-                        <div className="text-xs text-slate-500 mt-1">{p.date}</div>
-                        <button className="text-xs font-semibold text-rose-600 hover:underline mt-2 flex items-center gap-1">
+                        <div className="text-xs text-slate-500 mt-1">
+                          {p.date} • {p.subject}
+                        </div>
+                        <button
+                          onClick={() => {
+                            setSearch(p.title);
+                            setReadFilter("");
+                            setClassFilter("");
+                            setPage(1);
+                            setExpanded(p.id);
+                            markRead(p.id);
+                          }}
+                          className="text-xs font-semibold text-rose-600 hover:underline mt-2 flex items-center gap-1"
+                        >
                           อ่านเพิ่มเติม
                           <ChevronRight className="w-3.5 h-3.5" />
                         </button>
@@ -448,12 +458,16 @@ export default function Announcements() {
 
               {/* Categories */}
               <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-6">
-                <h3 className="font-bold text-slate-900 mb-4">หมวดหมู่ประกาศ</h3>
+                <h3 className="font-bold text-slate-900 mb-4">ประกาศตามรายวิชา</h3>
                 <div className="space-y-1">
-                  {categories.map(({ icon: Icon, label, count }) => (
+                  {categories.map(({ key, icon: Icon, label, count }) => (
                     <button
-                      key={label}
-                      className="w-full flex items-center gap-3 hover:bg-slate-50 rounded-xl px-2 py-2.5 transition-colors"
+                      key={key}
+                      onClick={() => {
+                        setClassFilter(classFilter === key ? "" : key);
+                        setPage(1);
+                      }}
+                      className={`w-full flex items-center gap-3 hover:bg-slate-50 rounded-xl px-2 py-2.5 transition-colors ${classFilter === key ? "bg-blue-50" : ""}`}
                     >
                       <div className="w-9 h-9 rounded-lg bg-blue-50 flex items-center justify-center shrink-0">
                         <Icon className="w-4 h-4 text-blue-600" />

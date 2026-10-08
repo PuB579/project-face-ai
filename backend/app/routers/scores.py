@@ -1,12 +1,13 @@
-from decimal import Decimal
+import datetime as dt
+from decimal import ROUND_HALF_UP, Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
+from app.attendance_utils import effective_status, late_minutes
 from app.database import get_db
 from app.deps import require_student, require_teacher
 from app.models import (
-    AttendanceDetail,
     AttendanceScoreRule,
     AttendanceSession,
     AttendanceStatus,
@@ -77,6 +78,13 @@ def get_score_rule(class_id: int, db: Session = Depends(get_db)):
 # คำนวณ + ดูคะแนน
 # ---------------------------------------------------------------------------
 def _compute_score_for_student(db: Session, class_id: int, student_id: int) -> Decimal:
+    """
+    สูตรเดียวกับหน้า "คะแนนเข้าเรียน" ของอาจารย์ (TeacherAttendanceScore.jsx)
+    - มาสาย: หักตามขั้นที่ min_minutes สูงสุดที่ไม่เกินจำนวนนาทีที่สาย
+    - direct: เต็ม full_score, ขาดหนึ่งครั้งหัก full_score / session_count
+    - per_session: ครั้งละ session_full_score รวมเป็นคะแนนดิบ แล้วแปลงสัดส่วนเป็น full_score
+    คาบที่หมดเวลาเช็คชื่อแล้วแต่ไม่มีบันทึก นับเป็นขาด
+    """
     rule = db.query(AttendanceScoreRule).filter(AttendanceScoreRule.class_id == class_id).first()
     if rule is None:
         return Decimal("0.00")
@@ -89,55 +97,46 @@ def _compute_score_for_student(db: Session, class_id: int, student_id: int) -> D
     if enrollment is None:
         return Decimal("0.00")
 
-    details = (
-        db.query(AttendanceDetail)
-        .join(AttendanceSession, AttendanceDetail.session_id == AttendanceSession.id)
-        .filter(
-            AttendanceSession.class_id == class_id,
-            AttendanceDetail.enrollment_id == enrollment.id,
+    class_ = enrollment.class_
+    sessions = db.query(AttendanceSession).filter(AttendanceSession.class_id == class_id).all()
+    now = dt.datetime.now().replace(microsecond=0)
+
+    present = 0
+    absent = 0
+    late_list: list[int] = []
+    for session in sessions:
+        detail = next(
+            (d for d in session.attendance_details if d.enrollment_id == enrollment.id), None
         )
-        .all()
-    )
+        status_ = effective_status(session, class_, detail, now)
+        if status_ == AttendanceStatus.present.value:
+            present += 1
+        elif status_ == AttendanceStatus.late.value:
+            late_list.append(late_minutes(session, detail.check_in_time) or 0)
+        elif status_ == AttendanceStatus.absent.value:
+            absent += 1
 
-    late_tiers = sorted(rule.late_tiers, key=lambda t: t.min_minutes)
+    tiers = sorted(rule.late_tiers, key=lambda t: t.min_minutes, reverse=True)
 
-    def deduction_for_late(check_in_time, start_time) -> Decimal:
-        if not late_tiers or check_in_time is None or start_time is None:
-            return Decimal("0.00")
-        import datetime as _dt
+    def late_penalty(minutes: int) -> Decimal:
+        tier = next((t for t in tiers if minutes >= t.min_minutes), None)
+        return Decimal(tier.deduction) if tier else Decimal("0")
 
-        minutes_late = (
-            _dt.datetime.combine(_dt.date.today(), check_in_time)
-            - _dt.datetime.combine(_dt.date.today(), start_time)
-        ).total_seconds() / 60
-        applicable = [t for t in late_tiers if minutes_late >= t.min_minutes]
-        if not applicable:
-            return Decimal("0.00")
-        return max(t.deduction for t in applicable)
-
+    full = Decimal(rule.full_score)
     if rule.mode == ScoreMode.direct:
-        score = Decimal(rule.full_score)
-        for d in details:
-            if d.status == AttendanceStatus.absent:
-                score -= Decimal(rule.full_score) / max(1, len(details))
-            elif d.status == AttendanceStatus.late:
-                score -= deduction_for_late(d.check_in_time, d.session.start_time)
-        return max(Decimal("0.00"), score)
+        absent_deduction = full / rule.session_count if rule.session_count else Decimal("0")
+        raw = full - sum((late_penalty(m) for m in late_list), Decimal("0")) - absent * absent_deduction
+    else:
+        session_full = Decimal(rule.session_full_score)
+        raw_max = session_full * rule.session_count
+        if not raw_max:
+            return Decimal("0.00")
+        raw_score = present * session_full + sum(
+            (max(Decimal("0"), session_full - late_penalty(m)) for m in late_list), Decimal("0")
+        )
+        raw = raw_score / raw_max * full
 
-    # per_session mode
-    total = Decimal("0.00")
-    sessions_seen = {d.session_id for d in details}
-    for d in details:
-        if d.status == AttendanceStatus.present:
-            total += Decimal(rule.session_full_score)
-        elif d.status == AttendanceStatus.late:
-            total += max(
-                Decimal("0.00"),
-                Decimal(rule.session_full_score) - deduction_for_late(d.check_in_time, d.session.start_time),
-            )
-        # absent -> +0
-    # เซสชันที่ยังไม่มี record เลย ถือว่าขาด (+0) อยู่แล้วเพราะไม่ถูกนับบวกเพิ่ม
-    return total
+    return max(Decimal("0"), min(full, raw)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
 
 @router.post("/recalculate/{class_id}", response_model=list[StudentScoreOut])
@@ -231,7 +230,7 @@ def override_student_score(
 
     row.score = payload.score
     row.note = payload.note
-    row.is_manual_override = True
+    row.is_manual_override = payload.manual
     db.commit()
     db.refresh(row)
 
