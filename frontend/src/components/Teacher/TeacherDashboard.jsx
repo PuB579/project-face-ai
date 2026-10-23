@@ -22,17 +22,16 @@ import {
   Pie,
   Cell,
 } from "recharts";
+import { useState } from "react";
 import { Link } from "react-router-dom";
 import TeacherLayout from "./TeacherLayout";
 import LoadState from "../LoadState";
 import { useAppearanceSettings } from "./useAppearanceSettings";
 import { colorOf, useTeacherData } from "./useTeacherData";
-import { getUser } from "../../lib/api";
 import { addDays, countStatus, dailyTrend, groupBy, hhmm, isoDate, pct, thaiDate } from "../../lib/format";
 
 export default function TeacherDashboard() {
   const { t } = useAppearanceSettings();
-  const user = getUser();
   const today = isoDate();
   const { classes, records, loading, error, reload } = useTeacherData({
     start: isoDate(addDays(new Date(), -6)),
@@ -41,19 +40,39 @@ export default function TeacherDashboard() {
 
   const todayRows = records.filter((r) => r.session_date === today);
   const todayCount = countStatus(todayRows);
-  const todayPending = todayRows.filter((r) => r.status === "open" || r.status === "upcoming").length;
   const totalStudents = classes.reduce((sum, c) => sum + c.student_count, 0);
 
+  // ตัวเลือกรายวิชาของกราฟและสรุปวันนี้ ("" = ทุกรายวิชา)
+  const [trendClass, setTrendClass] = useState("");
+  const [summaryClass, setSummaryClass] = useState("");
+  const ofClass = (rows, id) => (id ? rows.filter((r) => String(r.class_id) === id) : rows);
+
   // "เข้าเรียน" ในกราฟ = ตรงเวลา + สาย
-  const attendanceTrend = dailyTrend(records).map((d) => ({ ...d, present: d.present + d.late }));
+  const attendanceTrend = dailyTrend(ofClass(records, trendClass)).map((d) => ({ ...d, present: d.present + d.late }));
 
   const totalToday = todayRows.length;
+  const summaryRows = ofClass(todayRows, summaryClass);
+  const summaryCount = countStatus(summaryRows);
   const todaySummary = [
-    { name: t("common.status.present"), value: todayCount.present, color: "#22c55e" },
-    { name: t("common.status.late"), value: todayCount.late, color: "#f59e0b" },
-    { name: t("common.status.absent"), value: todayCount.absent, color: "#ef4444" },
-    { name: t("live.waiting"), value: todayPending, color: "#94a3b8" },
-  ].map((s) => ({ ...s, pct: `${pct(s.value, totalToday).toFixed(2)}%` }));
+    { name: t("common.status.present"), value: summaryCount.present, color: "#22c55e" },
+    { name: t("common.status.late"), value: summaryCount.late, color: "#f59e0b" },
+    { name: t("common.status.absent"), value: summaryCount.absent, color: "#ef4444" },
+  ].map((s) => ({ ...s, pct: `${pct(s.value, summaryRows.length).toFixed(2)}%` }));
+
+  const courseSelect = (value, onChange) => (
+    <select
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      className="text-xs font-medium text-slate-600 dark:text-slate-300 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-1.5 max-w-[14rem] truncate focus:outline-none focus:ring-2 focus:ring-blue-200 dark:focus:ring-blue-900"
+    >
+      <option value="">{t("dashboard.allCourses")}</option>
+      {classes.map((c) => (
+        <option key={c.id} value={c.id}>
+          {c.course_code} {c.course_name}
+        </option>
+      ))}
+    </select>
+  );
 
   // คาบเรียนวันนี้ (แถวละหนึ่งคาบ)
   const todaySessions = [...groupBy(todayRows, (r) => r.session_id).values()]
@@ -99,12 +118,6 @@ export default function TeacherDashboard() {
 
   return (
     <TeacherLayout
-      titleContent={
-        <>
-          {t("dashboard.greeting")}, {user?.full_name} <span className="inline-block">👋</span>
-        </>
-      }
-      subtitleKey="dashboard.subtitle"
       headerExtra={
         <button className="hidden sm:flex items-center gap-2 border border-slate-200 dark:border-slate-700 rounded-xl px-4 py-2.5 text-sm text-slate-600 dark:text-slate-300 font-medium hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors shrink-0">
           <CalendarDays className="w-4 h-4 text-slate-400 dark:text-slate-500" />
@@ -122,6 +135,7 @@ export default function TeacherDashboard() {
           label={t("dashboard.stats.totalCourses")}
           value={classes.length}
           sub={t("dashboard.stats.totalCoursesSub")}
+          to="/teacher-courses"
         />
         <StatCard
           icon={<Users className="w-6 h-6 text-emerald-600 dark:text-emerald-400" />}
@@ -129,6 +143,7 @@ export default function TeacherDashboard() {
           label={t("dashboard.stats.totalStudents")}
           value={totalStudents}
           sub={t("dashboard.stats.totalStudentsSub")}
+          to="/teacher-students"
         />
         <StatCard
           icon={<CalendarCheck className="w-6 h-6 text-purple-600 dark:text-purple-400" />}
@@ -136,6 +151,7 @@ export default function TeacherDashboard() {
           label={t("dashboard.stats.checkinToday")}
           value={todaySessions.length}
           sub={t("dashboard.stats.checkinTodaySub")}
+          to="/teacher-report"
         />
         <StatCard
           icon={<UserCheck className="w-6 h-6 text-amber-600 dark:text-amber-400" />}
@@ -144,6 +160,7 @@ export default function TeacherDashboard() {
           value={todayCount.present + todayCount.late}
           sub={`${pct(todayCount.present + todayCount.late, totalToday).toFixed(2)}%`}
           subColor="text-emerald-600 dark:text-emerald-400"
+          to="/teacher-report"
         />
         <StatCard
           icon={<UserX className="w-6 h-6 text-red-600 dark:text-red-400" />}
@@ -152,17 +169,21 @@ export default function TeacherDashboard() {
           value={todayCount.absent}
           sub={`${pct(todayCount.absent, totalToday).toFixed(2)}%`}
           subColor="text-red-500 dark:text-red-400"
+          to="/teacher-report"
         />
       </div>
 
       {/* Trend chart + today summary */}
       <div className="grid grid-cols-1 lg:grid-cols-[1.6fr_1fr] gap-5">
         <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-100 dark:border-slate-800 shadow-sm p-6">
-          <div className="flex items-center justify-between mb-4">
+          <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
             <h3 className="font-bold text-slate-900 dark:text-slate-100">{t("dashboard.trendTitle")}</h3>
-            <span className="text-xs font-medium text-slate-500 dark:text-slate-400 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-1.5">
-              {t("dashboard.last7Days")}
-            </span>
+            <div className="flex items-center gap-2">
+              {courseSelect(trendClass, setTrendClass)}
+              <span className="text-xs font-medium text-slate-500 dark:text-slate-400 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-1.5">
+                {t("dashboard.last7Days")}
+              </span>
+            </div>
           </div>
           <div className="h-64">
             <ResponsiveContainer width="100%" height="100%">
@@ -190,7 +211,10 @@ export default function TeacherDashboard() {
         </div>
 
         <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-100 dark:border-slate-800 shadow-sm p-6">
-          <h3 className="font-bold text-slate-900 dark:text-slate-100 mb-4">{t("dashboard.todaySummaryTitle")}</h3>
+          <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
+            <h3 className="font-bold text-slate-900 dark:text-slate-100">{t("dashboard.todaySummaryTitle")}</h3>
+            {courseSelect(summaryClass, setSummaryClass)}
+          </div>
           <div className="relative h-40">
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
@@ -202,7 +226,7 @@ export default function TeacherDashboard() {
               </PieChart>
             </ResponsiveContainer>
             <div className="absolute inset-0 flex flex-col items-center justify-center">
-              <div className="text-2xl font-bold text-slate-900 dark:text-slate-100">{totalToday}</div>
+              <div className="text-2xl font-bold text-slate-900 dark:text-slate-100">{summaryRows.length}</div>
               <div className="text-xs text-slate-400 dark:text-slate-500">{t("dashboard.totalStudentsLabel")}</div>
             </div>
           </div>
@@ -227,7 +251,7 @@ export default function TeacherDashboard() {
               <Users className="w-4 h-4" />
               {t("dashboard.attendanceRateToday")}
             </span>
-            <span className="font-bold">{todayCount.rate.toFixed(2)}%</span>
+            <span className="font-bold">{summaryCount.rate.toFixed(2)}%</span>
           </div>
         </div>
       </div>
@@ -324,16 +348,19 @@ export default function TeacherDashboard() {
   );
 }
 
-function StatCard({ icon, iconBg, label, value, sub, subColor }) {
+function StatCard({ icon, iconBg, label, value, sub, subColor, to }) {
   return (
-    <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-100 dark:border-slate-800 shadow-sm p-5 flex items-center gap-4">
+    <Link
+      to={to}
+      className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-100 dark:border-slate-800 shadow-sm p-5 flex items-center gap-4 hover:shadow-md hover:border-blue-200 dark:hover:border-blue-900 transition"
+    >
       <div className={`w-12 h-12 rounded-xl flex items-center justify-center shrink-0 ${iconBg}`}>{icon}</div>
       <div className="min-w-0">
         <div className="text-xs text-slate-500 dark:text-slate-400 font-medium truncate">{label}</div>
         <div className="text-2xl font-bold text-slate-900 dark:text-slate-100 leading-tight mt-0.5">{value}</div>
         <div className={`text-xs mt-0.5 truncate ${subColor || "text-slate-400 dark:text-slate-500"}`}>{sub}</div>
       </div>
-    </div>
+    </Link>
   );
 }
 
