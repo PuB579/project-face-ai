@@ -32,71 +32,16 @@ import { useAppearanceSettings } from "./useAppearanceSettings";
 import { useTeacherData } from "./useTeacherData";
 import { api } from "../../lib/api";
 import { useApi } from "../../lib/useApi";
-import { downloadBlob, groupBy, printTable, toExcel } from "../../lib/format";
-
-const DEFAULT_SESSION_COUNT = 16;
-// เงื่อนไขเริ่มต้น: มาสายตั้งแต่ 5 นาที หัก 1 คะแนน, ตั้งแต่ 10 นาที หัก 2 คะแนน, ตั้งแต่ 20 นาที หัก 3 คะแนน
-// (ครูปรับ/เพิ่ม/ลบเงื่อนไขได้อิสระ แยกเป็นรายวิชา)
-function defaultLateTiers() {
-  return [
-    { id: "tier-1", minMinutes: 5, deduction: 1 },
-    { id: "tier-2", minMinutes: 10, deduction: 2 },
-    { id: "tier-3", minMinutes: 20, deduction: 3 },
-  ];
-}
-
-// mode "direct"     = กำหนดคะแนนเต็มรวมโดยตรง (เช่น เต็ม 10) แล้วหักคะแนนตรงในสเกลนี้เลย
-// mode "perSession"  = กำหนดคะแนนเต็มต่อครั้ง (เช่น ครั้งละ 10 × 20 ครั้ง = ดิบ 200) แล้วแปลงสัดส่วนกลับมาเป็นคะแนนเต็มที่ใช้เข้าเกรด
-function defaultRule(sessionCount = DEFAULT_SESSION_COUNT) {
-  return {
-    mode: "direct",
-    full: 10,
-    sessionCount,
-    sessionFull: 10,
-    passThreshold: 5,
-    lateTiers: defaultLateTiers(),
-  };
-}
-
-// หาขั้นที่ตรงกับจำนวนนาทีที่สาย (ใช้ threshold สูงสุดที่ <= นาทีที่สาย)
-function latePenaltyFor(minutes, lateTiers) {
-  const applicable = [...lateTiers].filter((t) => minutes >= t.minMinutes).sort((a, b) => b.minMinutes - a.minMinutes)[0];
-  return applicable ? applicable.deduction : 0;
-}
-
-// โหมด "direct": คะแนนที่หักต่อครั้งที่ขาด = คะแนนเต็ม ÷ จำนวนครั้งเช็คชื่อ (ขาดครั้งนั้นจึงได้ 0 คะแนนเสมอ)
-function directAbsentDeduction(rule) {
-  return rule.sessionCount ? rule.full / rule.sessionCount : 0;
-}
-
-function computeScoreDirect(student, rule) {
-  const latePenalty = (student.lateRecords || []).reduce((sum, m) => sum + latePenaltyFor(m, rule.lateTiers), 0);
-  const absentPenalty = student.absent * directAbsentDeduction(rule);
-  const raw = rule.full - latePenalty - absentPenalty;
-  return Math.max(0, Math.round(Math.min(rule.full, raw) * 100) / 100);
-}
-
-// โหมด "perSession": แต่ละครั้งมีคะแนนเต็มของตัวเอง (sessionFull) รวมทุกครั้งเป็นคะแนนดิบ
-// (เช่น ครั้งละ 10 × 20 ครั้ง = ดิบ 200) แล้วแปลงสัดส่วนกลับมาเป็น "คะแนนเต็ม" ที่ใช้เข้าเกรดจริง
-function computeScorePerSession(student, rule) {
-  const rawMax = rule.sessionFull * rule.sessionCount;
-  if (!rawMax) return 0;
-
-  const presentRaw = student.present * rule.sessionFull;
-  const lateRaw = (student.lateRecords || []).reduce((sum, m) => {
-    const penalty = latePenaltyFor(m, rule.lateTiers);
-    return sum + Math.max(0, rule.sessionFull - penalty);
-  }, 0);
-  // ขาดเรียน = ได้ 0 คะแนนดิบของครั้งนั้นเสมอ ไม่ต้องตั้งค่าเอง
-  const rawScore = presentRaw + lateRaw;
-
-  const normalized = (rawScore / rawMax) * rule.full;
-  return Math.max(0, Math.round(Math.min(rule.full, normalized) * 100) / 100);
-}
-
-function computeScore(student, rule) {
-  return rule.mode === "perSession" ? computeScorePerSession(student, rule) : computeScoreDirect(student, rule);
-}
+import { downloadBlob, groupBy, printSheets, toExcelSheets } from "../../lib/format";
+import {
+  DEFAULT_SESSION_COUNT,
+  buildScoreSheet,
+  computeScore,
+  defaultRule,
+  directAbsentDeduction,
+  ruleFromServer,
+  studentStats,
+} from "./attendanceScoring";
 
 let tierIdCounter = 100;
 
@@ -128,18 +73,7 @@ export default function TeacherAttendanceScore() {
   const rule =
     ruleEdits[classId] ||
     (serverRule
-      ? {
-          mode: serverRule.mode === "per_session" ? "perSession" : "direct",
-          full: Number(serverRule.full_score),
-          sessionCount: serverRule.session_count,
-          sessionFull: Number(serverRule.session_full_score),
-          passThreshold: Number(serverRule.pass_threshold),
-          lateTiers: serverRule.late_tiers.map((tier) => ({
-            id: `tier-${tier.id}`,
-            minMinutes: tier.min_minutes,
-            deduction: Number(tier.deduction),
-          })),
-        }
+      ? ruleFromServer(serverRule)
       : defaultRule(Math.max(sessionCount, DEFAULT_SESSION_COUNT)));
 
   const setRule = (patch) => setRuleEdits((prev) => ({ ...prev, [classId]: { ...rule, ...patch } }));
@@ -154,9 +88,8 @@ export default function TeacherAttendanceScore() {
         id: e.student_id,
         code: e.student.student_code,
         name: e.student.full_name,
-        present: rows.filter((r) => r.status === "present").length,
-        lateRecords: rows.filter((r) => r.status === "late").map((r) => r.late_minutes || 0),
-        absent: rows.filter((r) => r.status === "absent").length,
+        major: e.student.major,
+        ...studentStats(rows),
       };
     });
   }, [classRecords, rosterReq.data, classId]);
@@ -266,14 +199,14 @@ export default function TeacherAttendanceScore() {
     }
   };
 
-  const exportHeaders = ["รหัสนักศึกษา", "ชื่อ-นามสกุล", "เข้าเรียน", "มาสาย", "ขาดเรียน", `คะแนน (เต็ม ${rule.full})`, "หมายเหตุ"];
-  const exportRows = () =>
-    allStudents.map((s) => [s.code, s.name, s.present, s.lateRecords.length, s.absent, s.score, s.note]);
-  const exportTitle = `คะแนนเข้าเรียน ${course.code} ${course.name}`;
-  const exportExcel = () => downloadBlob(`คะแนนเข้าเรียน_${course.code}.xls`, toExcel(exportTitle, exportHeaders, exportRows()));
+  // ตารางคะแนนรายคาบ (คอลัมน์ตามวันที่เรียน) แบบเดียวกับใบคะแนนมาเรียนใน Excel
+  const exportSheet = () => buildScoreSheet({ cls, rule, students: allStudents, records: classRecords });
+  const exportExcel = () => cls && downloadBlob(`คะแนนเข้าเรียน_${course.code}.xls`, toExcelSheets([exportSheet()]));
   const exportPdf = () => {
+    if (!cls) return;
     try {
-      printTable(exportTitle, exportHeaders, exportRows());
+      const sheet = exportSheet();
+      printSheets(sheet.title, [sheet]);
     } catch (err) {
       setSaveError(err.message);
     }

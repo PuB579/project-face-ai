@@ -123,40 +123,67 @@ const csvCell = (v) => {
 
 // CSV พร้อม BOM เพื่อให้ Excel อ่านภาษาไทยถูกต้อง
 export function toCsv(headers, rows) {
-  const lines = [headers, ...rows].map((r) => r.map(csvCell).join(","));
+  return toCsvSheets([{ headers, rows }]);
+}
+
+// หลายตารางในไฟล์เดียว: แต่ละตารางมีหัวเรื่อง (ถ้ามี) และเว้นบรรทัดคั่น
+export function toCsvSheets(sheets) {
+  const lines = sheets
+    .flatMap((sh, i) => [
+      ...(i > 0 ? [[]] : []),
+      ...(sh.title ? [[sh.title]] : []),
+      ...(sh.subtitle ? [[sh.subtitle]] : []),
+      sh.headers,
+      ...(sh.fullRow ? [sh.fullRow] : []),
+      ...sh.rows,
+    ])
+    .map((r) => r.map(csvCell).join(","));
   return new Blob(["﻿" + lines.join("\r\n")], { type: "text/csv;charset=utf-8" });
 }
 
 const htmlEscape = (v) =>
   String(v ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
 
-function htmlTable(title, headers, rows) {
-  return `<h2>${htmlEscape(title)}</h2><table border="1" cellspacing="0" cellpadding="4"><thead><tr>${headers
-    .map((h) => `<th>${htmlEscape(h)}</th>`)
-    .join("")}</tr></thead><tbody>${rows
-    .map((r) => `<tr>${r.map((c) => `<td>${htmlEscape(c)}</td>`).join("")}</tr>`)
-    .join("")}</tbody></table>`;
+// sheet = { title, subtitle?, headers, fullRow? (แถวคะแนนเต็มใต้หัวตาราง), rows, verticalCols? (คอลัมน์ที่หัวเป็นแนวตั้ง) }
+function htmlTable({ title, subtitle, headers, fullRow, rows, verticalCols = [] }) {
+  const vertical = new Set(verticalCols);
+  const th = (h, i) =>
+    vertical.has(i) ? `<th class="v" style="mso-rotate:90"><span>${htmlEscape(h)}</span></th>` : `<th>${htmlEscape(h)}</th>`;
+  const tr = (r, cls) => `<tr${cls ? ` class="${cls}"` : ""}>${r.map((c) => `<td>${htmlEscape(c)}</td>`).join("")}</tr>`;
+  return `<h2>${htmlEscape(title)}</h2>${subtitle ? `<p>${htmlEscape(subtitle)}</p>` : ""}<table border="1" cellspacing="0" cellpadding="4"><thead><tr>${headers
+    .map(th)
+    .join("")}</tr>${fullRow ? tr(fullRow, "full") : ""}</thead><tbody>${rows.map((r) => tr(r)).join("")}</tbody></table>`;
 }
 
 // ไฟล์ .xls แบบตาราง HTML — Excel เปิดได้โดยไม่ต้องใช้ไลบรารีเพิ่ม
 export function toExcel(title, headers, rows) {
-  const html = `<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel"><head><meta charset="utf-8"></head><body>${htmlTable(
-    title,
-    headers,
-    rows
-  )}</body></html>`;
+  return toExcelSheets([{ title, headers, rows }]);
+}
+
+// หลายตารางต่อกันในชีตเดียว (เช่น คะแนนเข้าเรียนหลายวิชา)
+export function toExcelSheets(sheets) {
+  const style = "<style>th{background:#c6e0b4}tr.full td{background:#e2efda;font-weight:bold}</style>";
+  const html = `<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel"><head><meta charset="utf-8">${style}</head><body>${sheets
+    .map(htmlTable)
+    .join("<br>")}</body></html>`;
   return new Blob(["﻿" + html], { type: "application/vnd.ms-excel;charset=utf-8" });
 }
 
 // PDF: เปิดหน้าต่างพิมพ์ของเบราว์เซอร์ ให้ผู้ใช้เลือก "บันทึกเป็น PDF"
 export function printTable(title, headers, rows) {
+  printSheets(title, [{ title, headers, rows }]);
+}
+
+export function printSheets(docTitle, sheets) {
   const win = window.open("", "_blank");
   if (!win) throw new Error("เบราว์เซอร์บล็อกหน้าต่างใหม่ กรุณาอนุญาต pop-up แล้วลองอีกครั้ง");
   win.document.write(
-    `<!doctype html><html><head><meta charset="utf-8"><title>${htmlEscape(title)}</title>
-    <style>body{font-family:sans-serif;padding:24px}table{border-collapse:collapse;width:100%;font-size:12px}
-    th{background:#eff6ff}th,td{border:1px solid #cbd5e1;padding:6px;text-align:left}</style></head>
-    <body>${htmlTable(title, headers, rows)}</body></html>`
+    `<!doctype html><html><head><meta charset="utf-8"><title>${htmlEscape(docTitle)}</title>
+    <style>body{font-family:sans-serif;padding:24px}table{border-collapse:collapse;width:100%;font-size:12px;margin-bottom:24px}
+    th{background:#eff6ff}th,td{border:1px solid #cbd5e1;padding:6px;text-align:left}
+    th.v{padding:6px 2px;vertical-align:bottom}th.v span{writing-mode:vertical-rl;transform:rotate(180deg);white-space:nowrap}
+    tr.full td{background:#f1f5f9;font-weight:bold}h2{margin:0 0 4px}p{margin:0 0 8px;color:#475569;font-size:12px}</style></head>
+    <body>${sheets.map(htmlTable).join("")}</body></html>`
   );
   win.document.close();
   win.focus();

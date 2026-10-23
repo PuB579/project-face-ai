@@ -30,13 +30,21 @@ import {
   groupBy,
   hhmm,
   isoDate,
-  printTable,
+  printSheets,
   STATUS_LABEL,
   termLabel,
   thaiDate,
-  toCsv,
-  toExcel,
+  toCsvSheets,
+  toExcelSheets,
 } from "../../lib/format";
+import {
+  DEFAULT_SESSION_COUNT,
+  buildScoreSheet,
+  computeScore,
+  defaultRule,
+  ruleFromServer,
+  studentStats,
+} from "./attendanceScoring";
 
 const HISTORY_KEY = "faceattend_export_history";
 const FACE_LABEL = { approved: "อนุมัติแล้ว", pending: "รออนุมัติ", rejected: "ถูกปฏิเสธ", none: "ยังไม่ลงทะเบียน" };
@@ -92,19 +100,19 @@ export default function TeacherExportData() {
   const [history, setHistory] = useState(loadHistory);
   const [exportError, setExportError] = useState("");
   const { classes, records, loading, error, reload } = useTeacherData();
-  const [extra, setExtra] = useState({ rosters: {}, scores: {}, error: "" });
+  const [extra, setExtra] = useState({ rosters: {}, scores: {}, rules: {}, error: "" });
 
-  // รายชื่อนักศึกษาและคะแนนของทุกคลาส (ใช้กับข้อมูลประเภท "นักศึกษา" และ "คะแนน")
+  // รายชื่อนักศึกษา คะแนน และเกณฑ์คะแนนของทุกคลาส (ใช้กับข้อมูลประเภท "นักศึกษา" และ "คะแนน")
   useEffect(() => {
     if (!classes.length) return undefined;
     let cancelled = false;
     Promise.all(
       classes.map((c) =>
-        Promise.all([api(`/classes/${c.id}/students`), api(`/scores/class/${c.id}`)]).then(([roster, scores]) => [
-          c.id,
-          roster,
-          scores,
-        ])
+        Promise.all([
+          api(`/classes/${c.id}/students`),
+          api(`/scores/class/${c.id}`),
+          api(`/scores/rules/${c.id}`),
+        ]).then(([roster, scores, rule]) => [c.id, roster, scores, rule])
       )
     )
       .then((rows) => {
@@ -112,6 +120,7 @@ export default function TeacherExportData() {
         setExtra({
           rosters: Object.fromEntries(rows.map(([id, roster]) => [id, roster])),
           scores: Object.fromEntries(rows.map(([id, , scores]) => [id, scores])),
+          rules: Object.fromEntries(rows.map(([id, , , rule]) => [id, rule])),
           error: "",
         });
       })
@@ -147,19 +156,6 @@ export default function TeacherExportData() {
           STATUS_LABEL[r.status],
         ]);
     }
-    if (type === "scores") {
-      const byKey = groupBy(
-        records.filter((r) => idSet.has(r.class_id) && r.session_date >= from && r.session_date <= to),
-        (r) => `${r.class_id}:${r.student_id}`
-      );
-      return picked.flatMap((c) =>
-        (extra.rosters[c.id] || []).map((e) => {
-          const cnt = countStatus(byKey.get(`${c.id}:${e.student_id}`) || []);
-          const score = (extra.scores[c.id] || []).find((s) => s.student_id === e.student_id);
-          return [e.student?.student_code, e.student?.full_name, c.code, cnt.present, cnt.late, cnt.absent, score ? Number(score.score).toFixed(2) : "-"];
-        })
-      );
-    }
     if (type === "students") {
       return picked.flatMap((c) =>
         (extra.rosters[c.id] || []).map((e) => [
@@ -180,6 +176,45 @@ export default function TeacherExportData() {
     ]);
   }
 
+  // คะแนนเข้าเรียน: 1 ตารางต่อ 1 คลาส คอลัมน์ตามวันที่เรียน (แบบใบคะแนนมาเรียนใน Excel)
+  // ใช้เกณฑ์ของคลาสเดียวกับหน้า "คะแนนเข้าเรียน" และคะแนนที่อาจารย์แก้เองถ้ามี
+  function buildScoreSheets(ids, from, to) {
+    const idSet = new Set(ids);
+    return courses
+      .filter((c) => idSet.has(c.id))
+      .map((c) => {
+        const classRecords = records.filter((r) => r.class_id === c.id && r.session_date >= from && r.session_date <= to);
+        const sessionCount = new Set(classRecords.map((r) => r.session_id)).size;
+        const serverRule = extra.rules[c.id];
+        const rule = serverRule ? ruleFromServer(serverRule) : defaultRule(Math.max(sessionCount, DEFAULT_SESSION_COUNT));
+        const byStudent = groupBy(classRecords, (r) => r.student_id);
+        const saved = new Map((extra.scores[c.id] || []).map((s) => [s.student_id, s]));
+        const students = (extra.rosters[c.id] || [])
+          .filter((e) => e.student)
+          .map((e) => {
+            const s = saved.get(e.student_id);
+            return {
+              id: e.student_id,
+              code: e.student.student_code,
+              name: e.student.full_name,
+              major: e.student.major,
+              score: s?.is_manual_override
+                ? Number(s.score)
+                : computeScore(studentStats(byStudent.get(e.student_id) || []), rule),
+              note: s?.note || "",
+            };
+          });
+        return buildScoreSheet({ cls: c.cls, rule, students, records: classRecords });
+      });
+  }
+
+  // ทุกประเภทส่งออกเป็นรายการตาราง: คะแนน = หลายตาราง (ต่อคลาส), ประเภทอื่น = ตารางเดียว
+  function buildSheets(typeId, ids, from, to, title) {
+    if (typeId === "scores") return buildScoreSheets(ids, from, to);
+    const fields = t(`export.fields.${typeId}`);
+    return [{ title, headers: fields, rows: buildRows(typeId, ids, from, to) }];
+  }
+
   const dataTypes = dataTypeMeta.map((d) => ({
     ...d,
     title: t(`export.dataTypes.${d.id}.title`),
@@ -188,8 +223,9 @@ export default function TeacherExportData() {
   }));
   const activeType = dataTypes.find((d) => d.id === selectedType);
   const activeFormat = formats.find((f) => f.id === selectedFormat);
-  const currentRows = buildRows(selectedType, selectedCourses, dateFrom, dateTo);
-  const estimatedRows = currentRows.length;
+  const currentSheets = buildSheets(selectedType, selectedCourses, dateFrom, dateTo, activeType.title);
+  const previewSheet = currentSheets[0] || { headers: activeType.fields, rows: [] };
+  const estimatedRows = currentSheets.reduce((sum, sh) => sum + sh.rows.length, 0);
 
   function toggleCourse(id) {
     setSelectedCourses((prev) => (prev.includes(id) ? prev.filter((c) => c !== id) : [...prev, id]));
@@ -203,15 +239,20 @@ export default function TeacherExportData() {
   function runExport(job) {
     const type = dataTypes.find((d) => d.id === job.typeId);
     const fmt = formats.find((f) => f.id === job.format);
-    const rows = buildRows(job.typeId, job.classIds, job.dateFrom, job.dateTo);
     const title = `${type.title} (${thaiDate(job.dateFrom)} - ${thaiDate(job.dateTo)})`;
+    const sheets = buildSheets(job.typeId, job.classIds, job.dateFrom, job.dateTo, title);
+    const toObjects = (sh) => sh.rows.map((r) => Object.fromEntries(sh.headers.map((h, i) => [h, r[i]])));
     let blob = null;
-    if (fmt.id === "csv") blob = toCsv(type.fields, rows);
-    else if (fmt.id === "excel") blob = toExcel(title, type.fields, rows);
+    // CSV ตารางเดียวไม่ต้องมีบรรทัดหัวเรื่อง เพื่อให้นำไปใช้ต่อในโปรแกรมอื่นได้ง่าย
+    if (fmt.id === "csv") blob = toCsvSheets(job.typeId === "scores" ? sheets : [{ ...sheets[0], title: "" }]);
+    else if (fmt.id === "excel") blob = toExcelSheets(sheets);
     else if (fmt.id === "json") {
-      const objects = rows.map((r) => Object.fromEntries(type.fields.map((f, i) => [f, r[i]])));
-      blob = new Blob([JSON.stringify(objects, null, 2)], { type: "application/json" });
-    } else printTable(title, type.fields, rows);
+      const data =
+        job.typeId === "scores"
+          ? sheets.map((sh) => ({ title: sh.title, subtitle: sh.subtitle, fullScores: sh.fullRow, students: toObjects(sh) }))
+          : toObjects(sheets[0]);
+      blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+    } else printSheets(title, sheets);
     if (blob) downloadBlob(job.name, blob);
     return blob ? blob.size : null;
   }
@@ -399,7 +440,7 @@ export default function TeacherExportData() {
             <table className="w-full text-sm min-w-[560px]">
               <thead>
                 <tr className="text-left text-xs text-slate-400 dark:text-slate-500 border-b border-slate-100 dark:border-slate-800">
-                  {activeType.fields.map((f) => (
+                  {previewSheet.headers.map((f) => (
                     <th key={f} className="py-2 pr-3 font-medium whitespace-nowrap">
                       {f}
                     </th>
@@ -407,14 +448,14 @@ export default function TeacherExportData() {
                 </tr>
               </thead>
               <tbody>
-                {currentRows.length === 0 && (
+                {previewSheet.rows.length === 0 && (
                   <tr>
-                    <td colSpan={activeType.fields.length} className="py-6 text-center text-sm text-slate-400 dark:text-slate-500">
+                    <td colSpan={previewSheet.headers.length} className="py-6 text-center text-sm text-slate-400 dark:text-slate-500">
                       {t("history.noData")}
                     </td>
                   </tr>
                 )}
-                {currentRows.slice(0, 5).map((row, i) => (
+                {previewSheet.rows.slice(0, 5).map((row, i) => (
                   <tr key={i} className="border-b border-slate-50 dark:border-slate-800/60 last:border-0">
                     {row.map((cell, j) => (
                       <td key={j} className="py-3 pr-3 text-slate-600 dark:text-slate-300 whitespace-nowrap">

@@ -415,7 +415,7 @@ export const translations = {
       step3Title: "รูปแบบไฟล์",
       dataTypes: {
         attendance: { title: "ประวัติการเข้าเรียน", desc: "บันทึกการเข้าเรียน มาสาย และขาดเรียนรายครั้ง" },
-        scores: { title: "คะแนนเข้าเรียน", desc: "คะแนนสะสมและอัตราการเข้าเรียนต่อรายวิชา" },
+        scores: { title: "คะแนนเข้าเรียน", desc: "คะแนนรายคาบแยกตามวันที่เรียน พร้อมคะแนนรวมและคะแนนที่แปลงแล้ว (1 ตารางต่อรายวิชา)" },
         students: { title: "รายชื่อนักศึกษา", desc: "ข้อมูลนักศึกษาและสถานะการลงทะเบียนใบหน้า" },
         summary: { title: "รายงานสรุปรายวิชา", desc: "ภาพรวมสถิติการเข้าเรียนแยกตามรายวิชา" },
       },
@@ -877,7 +877,7 @@ export const translations = {
       step3Title: "File Format",
       dataTypes: {
         attendance: { title: "Attendance History", desc: "Per-session check-in, late, and absence records" },
-        scores: { title: "Attendance Scores", desc: "Accumulated scores and attendance rate per course" },
+        scores: { title: "Attendance Scores", desc: "Per-session points by class date, with total and converted score (one table per course)" },
         students: { title: "Student List", desc: "Student info and face-registration status" },
         summary: { title: "Course Summary Report", desc: "Overview of attendance statistics per course" },
       },
