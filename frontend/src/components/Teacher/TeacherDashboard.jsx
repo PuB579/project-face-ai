@@ -118,6 +118,7 @@ export default function TeacherDashboard() {
 
   return (
     <TeacherLayout
+      titleKey="nav.dashboard"
       headerExtra={
         <button className="hidden sm:flex items-center gap-2 border border-slate-200 dark:border-slate-700 rounded-xl px-4 py-2.5 text-sm text-slate-600 dark:text-slate-300 font-medium hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors shrink-0">
           <CalendarDays className="w-4 h-4 text-slate-400 dark:text-slate-500" />
