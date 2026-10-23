@@ -1,14 +1,24 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+import math
+
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.database import get_db
 from app.deps import get_current_user
 from app.models import Student, Teacher, User
+from app.rate_limit import LoginRateLimiter
 from app.schemas import ChangePasswordRequest, LoginRequest, TokenResponse, UserOut
 from app.security import create_access_token, hash_password, verify_password
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+login_limiter = LoginRateLimiter(
+    max_per_user=settings.login_max_failures_per_user,
+    max_per_ip=settings.login_max_failures_per_ip,
+    window_seconds=settings.login_failure_window_minutes * 60,
+)
 
 
 def _full_name_of(user: User) -> str:
@@ -42,9 +52,20 @@ def _find_user(username: str, db: Session) -> User | None:
     return user
 
 
-def _authenticate(username: str, password: str, db: Session) -> User:
+def _authenticate(username: str, password: str, request: Request, db: Session) -> User:
+    ip = request.client.host if request.client else "unknown"
+    # เช็คก่อนตรวจรหัสผ่าน เพื่อไม่ให้คำขอที่ถูกล็อกเสียเวลา bcrypt
+    wait = login_limiter.retry_after(ip, username)
+    if wait:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"เข้าสู่ระบบไม่สำเร็จหลายครั้งเกินไป กรุณาลองใหม่อีกครั้งในอีก {math.ceil(wait / 60)} นาที",
+            headers={"Retry-After": str(wait)},
+        )
+
     user = _find_user(username, db)
     if user is None or not verify_password(password, user.password_hash):
+        login_limiter.record_failure(ip, username)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="อีเมลหรือรหัสผ่านไม่ถูกต้อง",
@@ -55,20 +76,23 @@ def _authenticate(username: str, password: str, db: Session) -> User:
             detail="บัญชีนี้ถูกระงับการใช้งาน",
         )
 
+    login_limiter.reset(ip, username)
     return user
 
 
 @router.post("/login", response_model=TokenResponse)
-def login(payload: LoginRequest, db: Session = Depends(get_db)):
-    user = _authenticate(payload.username, payload.password, db)
+def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)):
+    user = _authenticate(payload.username, payload.password, request, db)
     token = create_access_token({"sub": str(user.id), "role": user.role.value})
     return TokenResponse(access_token=token, user=_to_user_out(user))
 
 
 @router.post("/token", include_in_schema=False)
-def login_form(form: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
+def login_form(
+    request: Request, form: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)
+):
     """Form-based login for the Swagger UI "Authorize" button."""
-    user = _authenticate(form.username, form.password, db)
+    user = _authenticate(form.username, form.password, request, db)
     token = create_access_token({"sub": str(user.id), "role": user.role.value})
     return {"access_token": token, "token_type": "bearer"}
 

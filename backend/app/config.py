@@ -18,6 +18,11 @@ class Settings(BaseSettings):
     algorithm: str = "HS256"
     access_token_expire_minutes: int = 60 * 8  # 8 ชั่วโมง
 
+    # ----- จำกัดการ login ผิด (ดู app/rate_limit.py) -----
+    login_max_failures_per_user: int = 5  # ต่อ IP + ชื่อผู้ใช้
+    login_max_failures_per_ip: int = 20
+    login_failure_window_minutes: int = 15
+
     # ----- Uploads -----
     uploads_dir: str = "uploads"
     face_uploads_subdir: str = "faces"
