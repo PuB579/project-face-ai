@@ -95,8 +95,9 @@ export function termLabel(cls) {
 }
 
 // สถานะของคลาสตามช่วงวันที่เปิด-ปิดภาค
+// รอเริ่มสอน -> (อาจารย์กดเริ่มการสอน) -> กำลังสอน -> (เลยวันสิ้นสุด) -> สิ้นสุดแล้ว
 export function classPhase(cls, today = isoDate()) {
-  if (cls.start_date && today < cls.start_date) return "notstarted";
+  if (!cls.started_at) return "notstarted";
   if (cls.end_date && today > cls.end_date) return "ended";
   return "teaching";
 }

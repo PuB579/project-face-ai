@@ -3,10 +3,9 @@ import {
   X,
   Save,
   Clock,
-  Gauge,
+  CalendarDays,
+  Plus,
   ScanFace,
-  UserPlus,
-  Trash2,
   PlayCircle,
   CheckCircle2,
   XCircle,
@@ -22,7 +21,7 @@ const inputCls =
   "w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-sm text-slate-700 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-200 dark:focus:ring-blue-900";
 const labelCls = "text-xs font-semibold text-slate-500 dark:text-slate-400 mb-1.5 flex items-center gap-1.5";
 
-function ModalShell({ code, title, onClose, children, footer, wide }) {
+export function ModalShell({ code, title, onClose, children, footer, wide }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-slate-900/40" onClick={onClose} />
@@ -89,32 +88,164 @@ function CancelButton({ onClick }) {
 }
 
 // ---------------------------------------------------------------------------
+// ตารางเรียน + ช่วงเช็คชื่อ
+// เรียนได้หลายครั้งต่อสัปดาห์ (แต่ละช่วง = วัน + เวลาเริ่ม/เลิก) ระบบสร้างคาบให้ทุกสัปดาห์หลังเริ่มการสอน
+// เช็คชื่อภายใน onTime นาทีหลังเริ่มเรียน = เข้าเรียน, หลังจากนั้นถึงเลิกเรียน = มาสาย, ไม่เช็คชื่อ = ขาด
+// onTime เก็บเป็น late_threshold_minutes (ใช้ร่วมกันทุกช่วงเรียน)
+// ---------------------------------------------------------------------------
+const toMin = (hm) => {
+  const [h, m] = hm.split(":").map(Number);
+  return h * 60 + m;
+};
+const fromMin = (n) => `${String(Math.floor(n / 60)).padStart(2, "0")}:${String(n % 60).padStart(2, "0")}`;
+const newSlot = () => ({ weekday: "", start: "09:00", end: "12:00" });
+
+function initialClassTime(cls) {
+  const slots = (cls?.schedules || []).map((s) => ({
+    weekday: String(s.weekday),
+    start: hhmm(s.start_time),
+    end: hhmm(s.end_time),
+  }));
+  return { slots: slots.length ? slots : [newSlot()], onTime: cls?.late_threshold_minutes ?? 10 };
+}
+
+function classTimeError(time) {
+  const { slots } = time;
+  if (!slots.length || slots.some((s) => s.weekday === "")) return "courses.time.weekdayRequired";
+  if (slots.some((s) => !s.start || !s.end)) return "courses.time.required";
+  if (slots.some((s) => toMin(s.end) <= toMin(s.start))) return "courses.time.endBeforeStart";
+  const onTime = Number(time.onTime);
+  if (time.onTime === "" || onTime < 0 || slots.some((s) => onTime > toMin(s.end) - toMin(s.start)))
+    return "courses.time.onTimeOutOfRange";
+  const sorted = [...slots].sort((x, y) => x.weekday - y.weekday || toMin(x.start) - toMin(y.start));
+  if (sorted.some((s, i) => i && s.weekday === sorted[i - 1].weekday && toMin(s.start) < toMin(sorted[i - 1].end)))
+    return "courses.time.overlap";
+  return "";
+}
+
+const classTimeBody = (time) => ({
+  schedules: time.slots.map((s) => ({ weekday: Number(s.weekday), start_time: s.start, end_time: s.end })),
+  late_threshold_minutes: Number(time.onTime),
+  checkin_open_offset_minutes: 0,
+});
+
+function ClassTimeFields({ time, onChange }) {
+  const { t } = useAppearanceSettings();
+  const setSlot = (i, k) => (e) =>
+    onChange({ ...time, slots: time.slots.map((s, j) => (j === i ? { ...s, [k]: e.target.value } : s)) });
+  const removeSlot = (i) => onChange({ ...time, slots: time.slots.filter((_, j) => j !== i) });
+  const addSlot = () => onChange({ ...time, slots: [...time.slots, newSlot()] });
+  const onTime = Number(time.onTime) || 0;
+
+  return (
+    <div className="space-y-3">
+      <label className={labelCls}>
+        <CalendarDays className="w-3.5 h-3.5 text-slate-400 dark:text-slate-500" />
+        {t("courses.time.slotsLabel")}
+      </label>
+      {time.slots.map((slot, i) => {
+        const ok = slot.start && slot.end && toMin(slot.end) > toMin(slot.start);
+        const until = ok ? fromMin(Math.min(toMin(slot.start) + onTime, toMin(slot.end))) : "";
+        return (
+          <div key={i} className="space-y-1.5">
+            <div className="grid grid-cols-[1fr_auto_auto_auto] gap-2 items-center">
+              <select value={slot.weekday} onChange={setSlot(i, "weekday")} className={inputCls}>
+                <option value="">{t("courses.time.pickWeekday")}</option>
+                {[0, 1, 2, 3, 4, 5, 6].map((d) => (
+                  <option key={d} value={d}>
+                    {t("courses.time.everyPrefix")}{t(`courses.time.days.${d}`)}
+                  </option>
+                ))}
+              </select>
+              <input type="time" value={slot.start} onChange={setSlot(i, "start")} aria-label={t("courses.time.start")} className={`${inputCls} w-32`} />
+              <input type="time" value={slot.end} onChange={setSlot(i, "end")} aria-label={t("courses.time.end")} className={`${inputCls} w-32`} />
+              <button
+                type="button"
+                onClick={() => removeSlot(i)}
+                disabled={time.slots.length === 1}
+                aria-label={t("courses.time.removeSlot")}
+                title={t("courses.time.removeSlot")}
+                className="w-9 h-9 flex items-center justify-center rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-950/30 disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-slate-400"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            {ok && (
+              <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] font-medium pl-1">
+                <span className="text-emerald-600 dark:text-emerald-400">
+                  {t("common.status.present")} {slot.start}-{until}
+                </span>
+                <span className="text-amber-600 dark:text-amber-400">
+                  {t("common.status.late")} {until}-{slot.end}
+                </span>
+                <span className="text-red-500 dark:text-red-400">
+                  {t("common.status.absent")} {t("courses.time.notCheckedBy")} {slot.end}
+                </span>
+              </div>
+            )}
+          </div>
+        );
+      })}
+      <button
+        type="button"
+        onClick={addSlot}
+        className="flex items-center gap-1.5 text-sm font-semibold text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-950/40 rounded-lg px-3 py-2 transition-colors"
+      >
+        <Plus className="w-4 h-4" />
+        {t("courses.time.addSlot")}
+      </button>
+      <div>
+        <label className={labelCls}>
+          <ScanFace className="w-3.5 h-3.5 text-slate-400 dark:text-slate-500" />
+          {t("courses.time.onTimeMinutes")}
+        </label>
+        <input
+          type="number"
+          min={0}
+          max={240}
+          value={time.onTime}
+          onChange={(e) => onChange({ ...time, onTime: e.target.value })}
+          className={`${inputCls} w-32`}
+        />
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // จัดการคลาส: เกณฑ์การเช็คชื่อ + รายชื่อนักศึกษาในคลาส
 // ---------------------------------------------------------------------------
 export function ManageCourseModal({ cls, onClose, onSaved }) {
   const { t } = useAppearanceSettings();
+  const [time, setTime] = useState(() => initialClassTime(cls));
   const [rule, setRule] = useState({
-    openOffset: cls.checkin_open_offset_minutes,
-    closeOffset: cls.checkin_close_offset_minutes,
-    lateThreshold: cls.late_threshold_minutes,
-    confidence: cls.face_confidence_threshold,
     allowManualFallback: cls.allow_manual_fallback,
+    startDate: cls.start_date || "",
+    endDate: cls.end_date || "",
   });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const update = (patch) => setRule((r) => ({ ...r, ...patch }));
 
   async function handleSave() {
+    if (rule.startDate && rule.endDate && rule.endDate < rule.startDate) {
+      setError(t("courses.modal.endBeforeStart"));
+      return;
+    }
+    const timeError = classTimeError(time);
+    if (timeError) {
+      setError(t(timeError));
+      return;
+    }
     setBusy(true);
     setError("");
     try {
       await api(`/classes/${cls.id}`, {
         method: "PUT",
         body: {
-          checkin_open_offset_minutes: rule.openOffset,
-          checkin_close_offset_minutes: rule.closeOffset,
-          late_threshold_minutes: rule.lateThreshold,
-          face_confidence_threshold: rule.confidence,
+          start_date: rule.startDate || null,
+          end_date: rule.endDate || null,
+          ...classTimeBody(time),
           allow_manual_fallback: rule.allowManualFallback,
         },
       });
@@ -143,6 +274,18 @@ export function ManageCourseModal({ cls, onClose, onSaved }) {
       }
     >
       <ErrorText>{error}</ErrorText>
+      <div className="grid grid-cols-2 gap-4">
+        <div>
+          <label className={labelCls}>{t("courses.modal.teachStart")}</label>
+          <input type="date" value={rule.startDate} onChange={(e) => update({ startDate: e.target.value })} className={inputCls} />
+        </div>
+        <div>
+          <label className={labelCls}>{t("courses.modal.teachEnd")}</label>
+          <input type="date" value={rule.endDate} onChange={(e) => update({ endDate: e.target.value })} className={inputCls} />
+        </div>
+      </div>
+      <p className="text-[11px] text-slate-400 dark:text-slate-500 -mt-3">{t("courses.modal.teachEndNote")}</p>
+
       <div className="flex items-center gap-2.5 mb-1">
         <div className="w-9 h-9 rounded-xl bg-emerald-100 dark:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400 flex items-center justify-center shrink-0">
           <ScanFace className="w-4 h-4" />
@@ -153,73 +296,7 @@ export function ManageCourseModal({ cls, onClose, onSaved }) {
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-4">
-        <div>
-          <label className={labelCls}>
-            <Clock className="w-3.5 h-3.5 text-slate-400 dark:text-slate-500" />
-            {t("live.openOffset")}
-          </label>
-          <input
-            type="number"
-            min={0}
-            max={120}
-            value={rule.openOffset}
-            onChange={(e) => update({ openOffset: Math.max(0, Number(e.target.value) || 0) })}
-            className={inputCls}
-          />
-        </div>
-        <div>
-          <label className={labelCls}>
-            <Clock className="w-3.5 h-3.5 text-slate-400 dark:text-slate-500" />
-            {t("live.closeOffset")}
-          </label>
-          <input
-            type="number"
-            min={1}
-            max={300}
-            value={rule.closeOffset}
-            onChange={(e) => update({ closeOffset: Math.max(1, Number(e.target.value) || 1) })}
-            className={inputCls}
-          />
-        </div>
-      </div>
-      <p className="text-[11px] text-slate-400 dark:text-slate-500 -mt-3">{t("live.offsetNote")}</p>
-
-      <div>
-        <div className="flex items-center justify-between mb-1.5">
-          <label className="text-xs font-semibold text-slate-500 dark:text-slate-400">{t("courses.modal.lateThreshold")}</label>
-          <span className="text-sm font-bold text-slate-800 dark:text-slate-100">
-            {rule.lateThreshold} {t("common.units.minutes")}
-          </span>
-        </div>
-        <input
-          type="range"
-          min={0}
-          max={30}
-          value={rule.lateThreshold}
-          onChange={(e) => update({ lateThreshold: Number(e.target.value) })}
-          className="w-full accent-blue-600"
-        />
-      </div>
-
-      <div>
-        <div className="flex items-center justify-between mb-1.5">
-          <label className="text-xs font-semibold text-slate-500 dark:text-slate-400 flex items-center gap-1.5">
-            <Gauge className="w-3.5 h-3.5 text-slate-400 dark:text-slate-500" />
-            {t("courses.modal.confidence")}
-          </label>
-          <span className="text-sm font-bold text-slate-800 dark:text-slate-100">{rule.confidence}%</span>
-        </div>
-        <input
-          type="range"
-          min={50}
-          max={99}
-          value={rule.confidence}
-          onChange={(e) => update({ confidence: Number(e.target.value) })}
-          className="w-full accent-blue-600"
-        />
-        <p className="text-[11px] text-slate-400 dark:text-slate-500 mt-1">{t("courses.modal.confidenceNote")}</p>
-      </div>
+      <ClassTimeFields time={time} onChange={setTime} />
 
       <div className="pt-4 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between gap-4">
         <div className="min-w-0">
@@ -242,92 +319,31 @@ export function ManageCourseModal({ cls, onClose, onSaved }) {
         </button>
       </div>
 
-      <EnrollmentSection cls={cls} onChanged={onSaved} />
+      <EnrollmentSection cls={cls} />
     </ModalShell>
   );
 }
 
-function EnrollmentSection({ cls, onChanged }) {
+// รายชื่อนักศึกษาในคลาส (แสดงอย่างเดียว)
+function EnrollmentSection({ cls }) {
   const { t } = useAppearanceSettings();
   const enrolled = useApi(`/classes/${cls.id}/students`, []);
-  const allStudents = useApi("/students", []);
-  const [pick, setPick] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-
-  const enrolledIds = new Set((enrolled.data || []).map((e) => e.student_id));
-  const candidates = (allStudents.data || []).filter((s) => !enrolledIds.has(s.id));
-
-  async function run(fn) {
-    setBusy(true);
-    setError("");
-    try {
-      await fn();
-      enrolled.reload();
-      onChanged?.(false);
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  const add = () =>
-    run(async () => {
-      await api(`/classes/${cls.id}/students`, {
-        method: "POST",
-        body: { class_id: cls.id, student_id: Number(pick) },
-      });
-      setPick("");
-    });
-
-  const remove = (enrollment) => {
-    if (!window.confirm(`${t("live.confirmUnenroll")} ${enrollment.student?.full_name || ""}?`)) return;
-    run(() => api(`/classes/${cls.id}/students/${enrollment.id}`, { method: "DELETE" }));
-  };
+  const rows = enrolled.data || [];
 
   return (
     <div className="pt-4 border-t border-slate-100 dark:border-slate-800 space-y-3">
       <h4 className="font-bold text-slate-900 dark:text-slate-100 text-sm">
-        {t("live.classStudents")} ({(enrolled.data || []).length} {t("common.units.people")})
+        {t("live.classStudents")} ({rows.length} {t("common.units.people")})
       </h4>
-      <ErrorText>{error || enrolled.error}</ErrorText>
-      <div className="flex gap-2">
-        <select value={pick} onChange={(e) => setPick(e.target.value)} className={inputCls}>
-          <option value="">{t("live.pickStudent")}</option>
-          {candidates.map((s) => (
-            <option key={s.id} value={s.id}>
-              {s.student_code} — {s.full_name}
-            </option>
-          ))}
-        </select>
-        <button
-          onClick={add}
-          disabled={!pick || busy}
-          className="flex items-center gap-1.5 shrink-0 bg-emerald-500 hover:bg-emerald-600 disabled:opacity-50 text-white text-sm font-semibold px-4 rounded-xl"
-        >
-          <UserPlus className="w-4 h-4" />
-          {t("common.actions.add")}
-        </button>
-      </div>
+      <ErrorText>{enrolled.error}</ErrorText>
       <div className="max-h-56 overflow-y-auto divide-y divide-slate-50 dark:divide-slate-800">
-        {(enrolled.data || []).map((e) => (
-          <div key={e.id} className="flex items-center justify-between py-2 text-sm">
-            <div className="min-w-0">
-              <span className="text-slate-500 dark:text-slate-400 mr-2">{e.student?.student_code}</span>
-              <span className="text-slate-800 dark:text-slate-100">{e.student?.full_name}</span>
-            </div>
-            <button
-              onClick={() => remove(e)}
-              disabled={busy}
-              className="w-8 h-8 flex items-center justify-center rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-950/30"
-              aria-label={t("live.unenroll")}
-            >
-              <Trash2 className="w-4 h-4" />
-            </button>
+        {rows.map((e) => (
+          <div key={e.id} className="py-2 text-sm">
+            <span className="text-slate-500 dark:text-slate-400 mr-2">{e.student?.student_code}</span>
+            <span className="text-slate-800 dark:text-slate-100">{e.student?.full_name}</span>
           </div>
         ))}
-        {!enrolled.loading && (enrolled.data || []).length === 0 && (
+        {!enrolled.loading && rows.length === 0 && (
           <div className="py-3 text-sm text-slate-400 dark:text-slate-500">{t("live.noStudentsInClass")}</div>
         )}
       </div>
@@ -536,6 +552,7 @@ export function CreateCourseModal({ onClose, onCreated }) {
     start_date: "",
     end_date: "",
   });
+  const [time, setTime] = useState(() => initialClassTime(null));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
@@ -543,6 +560,11 @@ export function CreateCourseModal({ onClose, onCreated }) {
   async function handleCreate() {
     if (!form.course_code.trim() || !form.course_name.trim()) {
       setError(t("live.courseRequired"));
+      return;
+    }
+    const timeError = classTimeError(time);
+    if (timeError) {
+      setError(t(timeError));
       return;
     }
     setBusy(true);
@@ -570,6 +592,7 @@ export function CreateCourseModal({ onClose, onCreated }) {
           academic_year: form.academic_year || null,
           start_date: form.start_date || null,
           end_date: form.end_date || null,
+          ...classTimeBody(time),
         },
       });
       onCreated();
@@ -618,6 +641,7 @@ export function CreateCourseModal({ onClose, onCreated }) {
         {field("start_date", t("live.startDate"), { type: "date" })}
         {field("end_date", t("live.endDate"), { type: "date" })}
       </div>
+      <ClassTimeFields time={time} onChange={setTime} />
     </ModalShell>
   );
 }

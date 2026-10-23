@@ -3,7 +3,12 @@ import datetime as dt
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, status
 from sqlalchemy.orm import Session
 
-from app.attendance_utils import checkin_window, effective_status, late_minutes
+from app.attendance_utils import (
+    checkin_window,
+    effective_status,
+    late_minutes,
+    sync_scheduled_sessions,
+)
 from app.database import get_db
 from app.deps import get_current_user, require_student, require_teacher
 from app.face_service import (
@@ -56,11 +61,14 @@ def open_session(
         raise HTTPException(status_code=404, detail="ไม่พบคลาสเรียนนี้")
 
     now = dt.datetime.now()
+    session_date = payload.session_date or now.date()
+    # ไม่ระบุเวลา -> ใช้ช่วงเรียนแรกของวันนั้นตามตารางเรียน
+    slot = next((s for s in class_.schedules if s.weekday == session_date.weekday()), None)
     session = AttendanceSession(
         class_id=payload.class_id,
-        session_date=payload.session_date or now.date(),
-        start_time=payload.start_time or now.time().replace(microsecond=0),
-        end_time=payload.end_time,
+        session_date=session_date,
+        start_time=payload.start_time or (slot.start_time if slot else now.time().replace(microsecond=0)),
+        end_time=payload.end_time or (slot.end_time if slot else None),
         created_by=current_user.teacher_profile.id if current_user.teacher_profile else None,
     )
     db.add(session)
@@ -71,6 +79,7 @@ def open_session(
 
 @router.get("/sessions/{class_id}/today", response_model=AttendanceSessionOut | None)
 def get_today_session(class_id: int, db: Session = Depends(get_db)):
+    sync_scheduled_sessions(db)
     today = dt.date.today()
     session = (
         db.query(AttendanceSession)
@@ -96,6 +105,7 @@ def my_sessions_today(
     if student is None:
         raise HTTPException(status_code=404, detail="ไม่พบโปรไฟล์นักศึกษาของบัญชีนี้")
 
+    sync_scheduled_sessions(db)
     now = dt.datetime.now().replace(microsecond=0)
     enrollment_by_class = {e.class_id: e for e in student.enrollments}
     if not enrollment_by_class:
@@ -398,6 +408,7 @@ def attendance_records(
     ทุกแถว (คาบ x นักศึกษาที่ลงทะเบียน) ของคลาสที่ระบุ หรือของทุกคลาสที่อาจารย์คนนี้สอน
     รวมคนที่ไม่ได้เช็คชื่อด้วย (สถานะอนุมานเป็น absent / open / upcoming)
     """
+    sync_scheduled_sessions(db)
     query = db.query(AttendanceSession).join(Class, AttendanceSession.class_id == Class.id)
     if class_id is not None:
         query = query.filter(AttendanceSession.class_id == class_id)
@@ -456,6 +467,7 @@ def class_summary(
     db: Session = Depends(get_db),
     _teacher: User = Depends(require_teacher),
 ):
+    sync_scheduled_sessions(db)
     total_sessions = (
         db.query(AttendanceSession).filter(AttendanceSession.class_id == class_id).count()
     )

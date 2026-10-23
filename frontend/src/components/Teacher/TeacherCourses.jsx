@@ -21,19 +21,21 @@ import {
   ScanFace,
   Clock,
   BookOpen,
+  Trash2,
+  PlayCircle,
 } from "lucide-react";
 import TeacherLayout from "./TeacherLayout";
 import LoadState from "../LoadState";
 import { useAppearanceSettings } from "./useAppearanceSettings";
 import { colorOf, useTeacherData } from "./useTeacherData";
-import { CreateCourseModal, ManageCourseModal, SessionModal } from "./CourseModals";
+import { api } from "../../lib/api";
+import { CreateCourseModal, ManageCourseModal } from "./CourseModals";
 import { classPhase, countStatus, groupBy, isoDate, pct, termLabel, thaiDate, timeRange } from "../../lib/format";
 
 const filterTabs = [
-  { key: "all", labelKey: "courses.filters.all" },
+  { key: "notstarted", labelKey: "courses.filters.notStarted" },
   { key: "teaching", labelKey: "courses.filters.teaching" },
   { key: "ended", labelKey: "courses.filters.ended" },
-  { key: "notstarted", labelKey: "courses.filters.notStarted" },
 ];
 
 const courseIcons = [Database, Layers, Database, Brain, Cpu];
@@ -55,14 +57,15 @@ export default function TeacherCourses() {
   const { t } = useAppearanceSettings();
   const today = isoDate();
   const { classes, records, loading, error, reload } = useTeacherData();
-  const [activeFilter, setActiveFilter] = useState("all");
+  const [activeFilter, setActiveFilter] = useState("notstarted");
   const [view, setView] = useState("grid");
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState("");
   const [manageCls, setManageCls] = useState(null);
-  const [sessionCls, setSessionCls] = useState(null);
   const [creating, setCreating] = useState(false);
   const [savedCode, setSavedCode] = useState(null);
+  const [deletingId, setDeletingId] = useState(null);
+  const [startingId, setStartingId] = useState(null);
 
   const recordsByClass = groupBy(records, (r) => r.class_id);
   const todayRows = records.filter((r) => r.session_date === today);
@@ -84,7 +87,13 @@ export default function TeacherCourses() {
       room: cls.class_code || "-",
       students: cls.student_count,
       pct: Math.round(pct(todayCountOfClass.present + todayCountOfClass.late, todayOfClass.length)),
-      time: latestToday ? timeRange(latestToday.start_time, latestToday.end_time) : "-",
+      time: latestToday
+        ? timeRange(latestToday.start_time, latestToday.end_time)
+        : cls.schedules?.length
+          ? cls.schedules
+              .map((s) => `${t(`courses.time.daysShort.${s.weekday}`)} ${timeRange(s.start_time, s.end_time)}`)
+              .join(", ")
+          : "-",
       status: phase,
       icon: courseIcons[i % courseIcons.length],
       iconBg: colorOf(i).solid,
@@ -95,7 +104,7 @@ export default function TeacherCourses() {
   const q = search.trim().toLowerCase();
   const filtered = courses.filter(
     (c) =>
-      (activeFilter === "all" || c.status === activeFilter) &&
+      c.status === activeFilter &&
       (!q || `${c.code} ${c.name} ${c.room}`.toLowerCase().includes(q))
   );
   const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
@@ -108,6 +117,44 @@ export default function TeacherCourses() {
     setSavedCode(cls.course_code);
     reload();
     setTimeout(() => setSavedCode(null), 2500);
+  }
+
+  async function handleStart(c) {
+    if (!c.cls.end_date || !c.cls.schedules?.length) {
+      window.alert(t("courses.needEndDate"));
+      setManageCls(c.cls);
+      return;
+    }
+    if (!window.confirm(`${t("courses.confirmStart")} ${c.code} ${c.name}`)) return;
+    setStartingId(c.id);
+    try {
+      await api(`/classes/${c.id}/start`, { method: "POST" });
+      setActiveFilter("teaching");
+      setPage(1);
+      reload();
+    } catch (err) {
+      window.alert(err.message);
+    } finally {
+      setStartingId(null);
+    }
+  }
+
+  async function handleDelete(c) {
+    if (!window.confirm(`${t("courses.confirmDelete")} ${c.code} ${c.name}?`)) return;
+    setDeletingId(c.id);
+    try {
+      await api(`/classes/${c.id}`, { method: "DELETE" });
+      // ไม่มีกลุ่มเรียนอื่นในรายวิชานี้แล้ว -> ลบรายวิชาทิ้งด้วย
+      const siblings = classes.filter((x) => x.course_id === c.cls.course_id && x.id !== c.id);
+      if (c.cls.course_id && siblings.length === 0) {
+        await api(`/courses/${c.cls.course_id}`, { method: "DELETE" }).catch(() => {});
+      }
+      reload();
+    } catch (err) {
+      window.alert(err.message);
+    } finally {
+      setDeletingId(null);
+    }
   }
 
   return (
@@ -145,13 +192,6 @@ export default function TeacherCourses() {
             className="pl-10 pr-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-sm text-slate-700 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-200 dark:focus:ring-blue-900 w-56"
           />
         </div>
-        <button
-          onClick={() => setCreating(true)}
-          className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 transition-colors text-white text-sm font-semibold px-4 py-2.5 rounded-xl shadow-sm shadow-blue-200 dark:shadow-blue-950"
-        >
-          <Plus className="w-4 h-4" />
-          {t("courses.createCourse")}
-        </button>
       </div>
 
       {/* Stat cards */}
@@ -238,7 +278,8 @@ export default function TeacherCourses() {
       <div className={view === "grid" ? "grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5" : "flex flex-col gap-4"}>
         {visible.map((c) => {
           const Icon = c.icon;
-          const isEnded = c.status === "ended";
+          // กำลังสอน / สิ้นสุดแล้ว: ดูสถิติและลบได้เท่านั้น
+          const readOnly = c.status !== "notstarted";
           return (
             <div key={c.id} className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-100 dark:border-slate-800 shadow-sm p-5">
               <div className="flex items-start justify-between mb-2">
@@ -254,6 +295,15 @@ export default function TeacherCourses() {
                     </div>
                   </div>
                 </div>
+                <button
+                  onClick={() => handleDelete(c)}
+                  disabled={deletingId === c.id}
+                  title={t("courses.card.delete")}
+                  aria-label={t("courses.card.delete")}
+                  className="w-8 h-8 flex items-center justify-center rounded-lg text-slate-400 dark:text-slate-500 hover:text-red-500 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40 transition-colors shrink-0 disabled:opacity-50"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
               </div>
 
               <span className={`inline-block text-[11px] font-semibold px-2.5 py-1 rounded-full mb-3 ${statusCls[c.status]}`}>
@@ -290,26 +340,26 @@ export default function TeacherCourses() {
                 <div className={`h-full rounded-full ${c.barColor}`} style={{ width: `${c.pct}%` }} />
               </div>
 
-              <div className="grid grid-cols-3 gap-2">
-                <button
-                  onClick={() => setManageCls(c.cls)}
-                  className="flex items-center justify-center gap-1 text-[11px] font-semibold text-blue-600 dark:text-blue-400 border border-blue-200 dark:border-blue-900 rounded-lg py-2 hover:bg-blue-50 dark:hover:bg-blue-950/40 transition-colors"
-                >
-                  <Wrench className="w-3.5 h-3.5" />
-                  {t("courses.card.manage")}
-                </button>
-                <button
-                  disabled={isEnded}
-                  onClick={() => setSessionCls(c.cls)}
-                  className={`flex items-center justify-center gap-1 text-[11px] font-semibold rounded-lg py-2 transition-colors ${
-                    isEnded
-                      ? "text-slate-300 dark:text-slate-600 border border-slate-100 dark:border-slate-800 cursor-not-allowed"
-                      : "text-emerald-600 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-900 hover:bg-emerald-50 dark:hover:bg-emerald-950/40"
-                  }`}
-                >
-                  <ScanFace className="w-3.5 h-3.5" />
-                  {t("courses.card.checkin")}
-                </button>
+              <div className={`grid gap-2 ${readOnly ? "grid-cols-1" : "grid-cols-2"}`}>
+                {!readOnly ? (
+                  <>
+                    <button
+                      onClick={() => setManageCls(c.cls)}
+                      className="flex items-center justify-center gap-1 text-[11px] font-semibold text-blue-600 dark:text-blue-400 border border-blue-200 dark:border-blue-900 rounded-lg py-2 hover:bg-blue-50 dark:hover:bg-blue-950/40 transition-colors"
+                    >
+                      <Wrench className="w-3.5 h-3.5" />
+                      {t("courses.card.manage")}
+                    </button>
+                    <button
+                      onClick={() => handleStart(c)}
+                      disabled={startingId === c.id}
+                      className="flex items-center justify-center gap-1 text-[11px] font-semibold rounded-lg py-2 transition-colors text-emerald-600 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-900 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 disabled:opacity-50"
+                    >
+                      <PlayCircle className="w-3.5 h-3.5" />
+                      {t("courses.card.start")}
+                    </button>
+                  </>
+                ) : (
                 <Link
                   to={`/teacher-report?class=${c.id}`}
                   className="flex items-center justify-center gap-1 text-[11px] font-semibold text-purple-600 dark:text-purple-400 border border-purple-200 dark:border-purple-900 rounded-lg py-2 hover:bg-purple-50 dark:hover:bg-purple-950/40 transition-colors"
@@ -317,12 +367,14 @@ export default function TeacherCourses() {
                   <BarChart3 className="w-3.5 h-3.5" />
                   {t("courses.card.stats")}
                 </Link>
+                )}
               </div>
             </div>
           );
         })}
 
-        {/* Create new course card */}
+        {/* Create new course card — เฉพาะแท็บรอเริ่มสอน */}
+        {activeFilter === "notstarted" && (
         <button
           onClick={() => setCreating(true)}
           className="flex flex-col items-center justify-center gap-3 bg-white dark:bg-slate-900 rounded-2xl border-2 border-dashed border-slate-200 dark:border-slate-700 hover:border-blue-300 dark:hover:border-blue-800 hover:bg-blue-50/40 dark:hover:bg-blue-950/20 transition-colors p-8 text-center min-h-[260px]"
@@ -339,6 +391,7 @@ export default function TeacherCourses() {
             {t("courses.createCourse")}
           </span>
         </button>
+        )}
       </div>
 
       {/* Pagination */}
@@ -384,7 +437,6 @@ export default function TeacherCourses() {
           onSaved={(close = true) => (close ? handleSaved(manageCls) : reload())}
         />
       )}
-      {sessionCls && <SessionModal cls={sessionCls} onClose={() => setSessionCls(null)} onChanged={reload} />}
       {creating && (
         <CreateCourseModal
           onClose={() => setCreating(false)}

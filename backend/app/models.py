@@ -228,6 +228,8 @@ class Class(Base):
     academic_year: Mapped[str | None] = mapped_column(String(10), nullable=True)
     start_date: Mapped[object | None] = mapped_column(Date, nullable=True)
     end_date: Mapped[object | None] = mapped_column(Date, nullable=True)
+    # เวลาที่อาจารย์กด "เริ่มการสอน" (NULL = ยังรอเริ่มสอน)
+    started_at: Mapped[object | None] = mapped_column(DateTime, nullable=True)
 
     # per-class check-in configuration (ไม่ใช้ค่า global อีกต่อไป)
     checkin_open_offset_minutes: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
@@ -255,6 +257,12 @@ class Class(Base):
     announcements = relationship(
         "Announcement", back_populates="class_", cascade="all, delete-orphan"
     )
+    schedules = relationship(
+        "ClassSchedule",
+        back_populates="class_",
+        cascade="all, delete-orphan",
+        order_by="(ClassSchedule.weekday, ClassSchedule.start_time)",
+    )
 
     # ข้อมูลประกอบสำหรับ ClassOut (ไม่ใช่คอลัมน์ในฐานข้อมูล)
     @property
@@ -280,6 +288,24 @@ class Class(Base):
     @property
     def student_count(self) -> int:
         return sum(1 for e in self.enrollments if e.status == EnrollmentStatus.enrolled)
+
+
+# ---------------------------------------------------------------------------
+# class_schedules: วันและเวลาเรียนประจำสัปดาห์ (1 คลาสเรียนได้หลายครั้งต่อสัปดาห์)
+# ระบบสร้างคาบเช็คชื่อให้ตามตารางนี้ทุกสัปดาห์หลังเริ่มการสอน
+# ---------------------------------------------------------------------------
+class ClassSchedule(Base):
+    __tablename__ = "class_schedules"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    class_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("classes.id", ondelete="CASCADE"), nullable=False
+    )
+    weekday: Mapped[int] = mapped_column(Integer, nullable=False)  # 0=จันทร์ ... 6=อาทิตย์
+    start_time: Mapped[object] = mapped_column(Time, nullable=False)
+    end_time: Mapped[object] = mapped_column(Time, nullable=False)
+
+    class_ = relationship("Class", back_populates="schedules")
 
 
 # ---------------------------------------------------------------------------

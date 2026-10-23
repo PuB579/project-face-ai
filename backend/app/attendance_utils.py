@@ -9,6 +9,8 @@
 """
 import datetime as dt
 
+from sqlalchemy.orm import Session
+
 from app.models import AttendanceDetail, AttendanceSession, Class
 
 EFFECTIVE_OPEN = "open"
@@ -18,14 +20,19 @@ EFFECTIVE_UPCOMING = "upcoming"
 def checkin_window(
     session: AttendanceSession, class_: Class
 ) -> tuple[dt.datetime | None, dt.datetime | None]:
-    """ช่วงเวลาที่เปิดให้เช็คชื่อ: [start - open_offset, start + close_offset] ไม่เกิน end_time"""
+    """ช่วงเวลาที่เปิดให้เช็คชื่อ: [start - open_offset, เวลาเลิกเรียน]
+
+    เช็คชื่อภายใน start + late_threshold = เข้าเรียน, หลังจากนั้นถึงเวลาเลิกเรียน = มาสาย,
+    ไม่เช็คชื่อจนเลิกเรียน = ขาด (คาบที่ไม่มีเวลาเลิกเรียนใช้ start + close_offset แทน)
+    """
     if session.start_time is None:
         return None, None
     start_dt = dt.datetime.combine(session.session_date, session.start_time)
     open_dt = start_dt - dt.timedelta(minutes=class_.checkin_open_offset_minutes)
-    close_dt = start_dt + dt.timedelta(minutes=class_.checkin_close_offset_minutes)
     if session.end_time is not None:
-        close_dt = min(close_dt, dt.datetime.combine(session.session_date, session.end_time))
+        close_dt = dt.datetime.combine(session.session_date, session.end_time)
+    else:
+        close_dt = start_dt + dt.timedelta(minutes=class_.checkin_close_offset_minutes)
     return open_dt, close_dt
 
 
@@ -55,3 +62,47 @@ def late_minutes(session: AttendanceSession, check_in_time: dt.time | None) -> i
     start_dt = dt.datetime.combine(session.session_date, session.start_time)
     checkin_dt = dt.datetime.combine(session.session_date, check_in_time)
     return max(0, int((checkin_dt - start_dt).total_seconds() // 60))
+
+
+def sync_scheduled_sessions(db: Session, today: dt.date | None = None) -> None:
+    """
+    สร้างคาบเช็คชื่อตามตารางเรียนประจำสัปดาห์ (class_schedules) ให้คลาสที่ "เริ่มการสอน" แล้ว
+    ตั้งแต่วันที่กดเริ่มการสอน (หรือวันเริ่มการสอน ถ้าช้ากว่า) จนถึงวันนี้/วันสิ้นสุดการสอน
+    เติมย้อนหลังด้วย เพื่อให้วันที่ไม่มีใครเปิดระบบยังนับขาดได้ถูกต้อง
+    """
+    today = today or dt.date.today()
+    classes = db.query(Class).filter(Class.started_at.isnot(None), Class.schedules.any()).all()
+    created = False
+    for class_ in classes:
+        first = class_.started_at.date()
+        if class_.start_date and class_.start_date > first:
+            first = class_.start_date
+        last = min(today, class_.end_date) if class_.end_date else today
+        if first > last:
+            continue
+        # (วันที่, เวลาเริ่ม) ของคาบที่มีอยู่แล้ว — วันเดียวกันมีได้หลายคาบถ้าเรียนหลายช่วง
+        existing = {
+            tuple(row)
+            for row in db.query(AttendanceSession.session_date, AttendanceSession.start_time).filter(
+                AttendanceSession.class_id == class_.id,
+                AttendanceSession.session_date >= first,
+                AttendanceSession.session_date <= last,
+            )
+        }
+        for slot in class_.schedules:
+            day = first + dt.timedelta(days=(slot.weekday - first.weekday()) % 7)
+            while day <= last:
+                if (day, slot.start_time) not in existing:
+                    db.add(
+                        AttendanceSession(
+                            class_id=class_.id,
+                            session_date=day,
+                            start_time=slot.start_time,
+                            end_time=slot.end_time,
+                            created_by=class_.course.teacher_id if class_.course else None,
+                        )
+                    )
+                    created = True
+                day += dt.timedelta(days=7)
+    if created:
+        db.commit()

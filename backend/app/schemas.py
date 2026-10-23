@@ -188,6 +188,17 @@ class CourseOut(CourseBase):
 # ---------------------------------------------------------------------------
 # Class
 # ---------------------------------------------------------------------------
+class ClassScheduleIn(BaseModel):
+    weekday: int = Field(ge=0, le=6, description="0=จันทร์ ... 6=อาทิตย์")
+    start_time: dt.time
+    end_time: dt.time
+
+
+class ClassScheduleOut(ClassScheduleIn):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+
+
 class ClassBase(BaseModel):
     course_id: int
     class_code: str | None = None
@@ -204,7 +215,7 @@ class ClassBase(BaseModel):
 
 
 class ClassCreate(ClassBase):
-    pass
+    schedules: list[ClassScheduleIn] = []
 
 
 class ClassUpdate(BaseModel):
@@ -214,6 +225,7 @@ class ClassUpdate(BaseModel):
     academic_year: str | None = None
     start_date: dt.date | None = None
     end_date: dt.date | None = None
+    schedules: list[ClassScheduleIn] | None = None
     checkin_open_offset_minutes: int | None = None
     checkin_close_offset_minutes: int | None = None
     late_threshold_minutes: int | None = None
@@ -231,6 +243,8 @@ class ClassOut(ClassBase):
     teacher_id: int | None = None
     teacher_name: str | None = None
     student_count: int = 0
+    started_at: dt.datetime | None = None
+    schedules: list[ClassScheduleOut] = []
     created_at: dt.datetime
     updated_at: dt.datetime
 

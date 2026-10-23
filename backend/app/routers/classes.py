@@ -1,9 +1,11 @@
+import datetime as dt
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.deps import ensure_course_owner, get_current_user, require_teacher
-from app.models import Class, Course, Enrollment, Student, User, UserRole
+from app.models import Class, ClassSchedule, Course, Enrollment, Student, User, UserRole
 from app.routers.students import to_student_out
 from app.schemas import ClassCreate, ClassOut, ClassUpdate, EnrollmentCreate, EnrollmentOut
 
@@ -26,6 +28,32 @@ def get_owned_class(db: Session, class_id: int, current_user: User) -> Class:
     return class_
 
 
+def _minutes(t: dt.time) -> int:
+    return t.hour * 60 + t.minute
+
+
+def validate_schedules(class_: Class) -> None:
+    """
+    แต่ละช่วงเรียน: เวลาเลิกต้องหลังเวลาเริ่ม, ช่วงเช็คชื่อตรงเวลาต้องไม่เกินเวลาเรียน
+    และช่วงเรียนในวันเดียวกันต้องไม่ทับกัน
+    """
+    slots = sorted(class_.schedules, key=lambda s: (s.weekday, s.start_time))
+    for i, slot in enumerate(slots):
+        if slot.end_time <= slot.start_time:
+            raise HTTPException(status_code=400, detail="เวลาเลิกเรียนต้องหลังเวลาเริ่มเรียน")
+        if not 0 <= class_.late_threshold_minutes <= _minutes(slot.end_time) - _minutes(slot.start_time):
+            raise HTTPException(
+                status_code=400, detail="เวลาเช็คชื่อตรงเวลาต้องไม่เกินระยะเวลาเรียนของทุกช่วง"
+            )
+        prev = slots[i - 1] if i else None
+        if prev and prev.weekday == slot.weekday and slot.start_time < prev.end_time:
+            raise HTTPException(status_code=400, detail="ช่วงเวลาเรียนในวันเดียวกันทับกัน")
+
+
+def build_schedules(items) -> list[ClassSchedule]:
+    return [ClassSchedule(**item.model_dump()) for item in items]
+
+
 @router.get("", response_model=list[ClassOut])
 def list_classes(course_id: int | None = None, db: Session = Depends(get_db)):
     query = db.query(Class)
@@ -41,7 +69,9 @@ def create_class(
     current_user: User = Depends(require_teacher),
 ):
     get_owned_course(db, payload.course_id, current_user)
-    class_ = Class(**payload.model_dump())
+    class_ = Class(**payload.model_dump(exclude={"schedules"}))
+    class_.schedules = build_schedules(payload.schedules)
+    validate_schedules(class_)
     db.add(class_)
     db.commit()
     db.refresh(class_)
@@ -89,12 +119,35 @@ def update_class(
     current_user: User = Depends(require_teacher),
 ):
     class_ = get_owned_class(db, class_id, current_user)
-    data = payload.model_dump(exclude_unset=True)
+    data = payload.model_dump(exclude_unset=True, exclude={"schedules"})
     # ย้ายคลาสไปรายวิชาอื่นได้เฉพาะรายวิชาที่ตัวเองเป็นเจ้าของ
     if data.get("course_id") not in (None, class_.course_id):
         get_owned_course(db, data["course_id"], current_user)
     for key, value in data.items():
         setattr(class_, key, value)
+    if payload.schedules is not None:
+        class_.schedules = build_schedules(payload.schedules)
+    validate_schedules(class_)
+    db.commit()
+    db.refresh(class_)
+    return class_
+
+
+@router.post("/{class_id}/start", response_model=ClassOut)
+def start_class(
+    class_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_teacher),
+):
+    """เริ่มการสอน: ย้ายจาก "รอเริ่มสอน" ไป "กำลังสอน" (สิ้นสุดอัตโนมัติเมื่อเลย end_date)"""
+    class_ = get_owned_class(db, class_id, current_user)
+    if class_.started_at is not None:
+        raise HTTPException(status_code=400, detail="รายวิชานี้เริ่มการสอนไปแล้ว")
+    if class_.end_date is None:
+        raise HTTPException(status_code=400, detail="กรุณากำหนดวันสิ้นสุดการสอนก่อนเริ่มการสอน")
+    if not class_.schedules:
+        raise HTTPException(status_code=400, detail="กรุณากำหนดวันเรียนและเวลาเรียนก่อนเริ่มการสอน")
+    class_.started_at = dt.datetime.now()
     db.commit()
     db.refresh(class_)
     return class_

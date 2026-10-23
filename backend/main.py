@@ -9,8 +9,11 @@ CS FaceAttend — Backend API (FastAPI + MySQL/MariaDB)
 """
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import inspect, text
 
 from app.config import settings
+from app.database import engine
+from app.models import ClassSchedule
 from app.routers import (
     announcements,
     attendance,
@@ -29,6 +32,23 @@ app = FastAPI(
     description="ระบบเช็คชื่อเข้าเรียนด้วยการสแกนใบหน้า — ภาควิชาวิทยาการคอมพิวเตอร์",
     version="2.0.0",
 )
+
+
+
+def ensure_columns():
+    """เติมคอลัมน์ใหม่ให้ฐานข้อมูลเดิม (ตารางสร้างผ่าน phpMyAdmin ไม่มี migration)"""
+    cols = {c["name"] for c in inspect(engine).get_columns("classes")}
+    with engine.begin() as conn:
+        if "started_at" not in cols:
+            conn.execute(text("ALTER TABLE classes ADD COLUMN started_at DATETIME NULL AFTER end_date"))
+        # คอลัมน์เวลาเรียนแบบช่องเดียว (รุ่นก่อน) ย้ายไปอยู่ใน class_schedules แล้ว
+        for old in ("class_start_time", "class_end_time", "class_weekday"):
+            if old in cols:
+                conn.execute(text(f"ALTER TABLE classes DROP COLUMN {old}"))
+    ClassSchedule.__table__.create(bind=engine, checkfirst=True)
+
+
+ensure_columns()
 
 app.add_middleware(
     CORSMiddleware,
