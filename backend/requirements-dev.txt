@@ -1,0 +1,4 @@
+-r requirements.txt
+
+# unit tests: py -3.12 -m pytest
+pytest==8.3.4

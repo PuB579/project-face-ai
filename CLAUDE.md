@@ -19,6 +19,9 @@ cp .env.example .env            # set DATABASE_URL, SECRET_KEY
 uvicorn main:app --reload       # http://127.0.0.1:8000/docs
 python seed.py                  # test accounts: teacher01@example.com / Teach123!, student01@example.com / Passw0rd!
 python seed_demo.py             # idempotent demo data for teacher T0001 (enrollments, backfilled sessions, random attendance)
+pip install -r requirements-dev.txt    # adds pytest
+py -3.12 -m pytest                     # unit tests (attendance rules, score formulas); no MySQL/server needed
+py -3.12 -m pytest tests/test_scores.py -k per_session   # single file / filter
 python tests/e2e_smoke.py [face.jpg]   # API smoke test vs a live server + seeded DB; creates TEST-* rows and deletes them at the end
 ```
 

@@ -116,6 +116,13 @@ def _compute_score_for_student(db: Session, class_id: int, student_id: int) -> D
         elif status_ == AttendanceStatus.absent.value:
             absent += 1
 
+    return compute_score(rule, present, absent, late_list)
+
+
+def compute_score(
+    rule: AttendanceScoreRule, present: int, absent: int, late_list: list[int]
+) -> Decimal:
+    """คิดคะแนนจากจำนวนครั้งที่เข้าเรียน/ขาด และนาทีที่สายของแต่ละครั้งที่มาสาย (ไม่แตะฐานข้อมูล)"""
     tiers = sorted(rule.late_tiers, key=lambda t: t.min_minutes, reverse=True)
 
     def late_penalty(minutes: int) -> Decimal:
