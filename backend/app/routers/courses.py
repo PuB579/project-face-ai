@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.deps import require_teacher
+from app.deps import ensure_course_owner, require_teacher
 from app.models import Course
 from app.schemas import CourseCreate, CourseOut
 
@@ -27,8 +27,15 @@ def list_courses(
 def create_course(
     payload: CourseCreate,
     db: Session = Depends(get_db),
-    _teacher=Depends(require_teacher),
+    current_user=Depends(require_teacher),
 ):
+    # รายวิชาที่สร้างต้องเป็นของอาจารย์ที่ login อยู่เสมอ
+    teacher = current_user.teacher_profile
+    if teacher is None:
+        raise HTTPException(status_code=403, detail="ไม่พบข้อมูลอาจารย์ของบัญชีนี้")
+    if payload.teacher_id not in (None, teacher.id):
+        raise HTTPException(status_code=403, detail="สร้างรายวิชาให้อาจารย์คนอื่นไม่ได้")
+    payload.teacher_id = teacher.id
     existing = db.query(Course).filter(Course.course_code == payload.course_code).first()
     if existing:
         raise HTTPException(status_code=400, detail="รหัสวิชานี้ถูกใช้งานแล้ว")
@@ -52,11 +59,14 @@ def update_course(
     course_id: int,
     payload: CourseCreate,
     db: Session = Depends(get_db),
-    _teacher=Depends(require_teacher),
+    current_user=Depends(require_teacher),
 ):
     course = db.query(Course).filter(Course.id == course_id).first()
     if course is None:
         raise HTTPException(status_code=404, detail="ไม่พบรายวิชานี้")
+    ensure_course_owner(current_user, course)
+    # ห้ามโอนรายวิชาไปให้อาจารย์คนอื่นผ่านการแก้ไข
+    payload.teacher_id = course.teacher_id
     for key, value in payload.model_dump().items():
         setattr(course, key, value)
     db.commit()
@@ -68,10 +78,11 @@ def update_course(
 def delete_course(
     course_id: int,
     db: Session = Depends(get_db),
-    _teacher=Depends(require_teacher),
+    current_user=Depends(require_teacher),
 ):
     course = db.query(Course).filter(Course.id == course_id).first()
     if course is None:
         raise HTTPException(status_code=404, detail="ไม่พบรายวิชานี้")
+    ensure_course_owner(current_user, course)
     db.delete(course)
     db.commit()

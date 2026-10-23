@@ -2,12 +2,28 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.deps import get_current_user, require_teacher
-from app.models import Class, Enrollment, Student, User, UserRole
+from app.deps import ensure_course_owner, get_current_user, require_teacher
+from app.models import Class, Course, Enrollment, Student, User, UserRole
 from app.routers.students import to_student_out
 from app.schemas import ClassCreate, ClassOut, ClassUpdate, EnrollmentCreate, EnrollmentOut
 
 router = APIRouter(prefix="/classes", tags=["classes"])
+
+
+def get_owned_course(db: Session, course_id: int, current_user: User) -> Course:
+    course = db.query(Course).filter(Course.id == course_id).first()
+    if course is None:
+        raise HTTPException(status_code=404, detail="ไม่พบรายวิชานี้")
+    ensure_course_owner(current_user, course)
+    return course
+
+
+def get_owned_class(db: Session, class_id: int, current_user: User) -> Class:
+    class_ = db.query(Class).filter(Class.id == class_id).first()
+    if class_ is None:
+        raise HTTPException(status_code=404, detail="ไม่พบคลาสเรียนนี้")
+    ensure_course_owner(current_user, class_.course)
+    return class_
 
 
 @router.get("", response_model=list[ClassOut])
@@ -22,8 +38,9 @@ def list_classes(course_id: int | None = None, db: Session = Depends(get_db)):
 def create_class(
     payload: ClassCreate,
     db: Session = Depends(get_db),
-    _teacher=Depends(require_teacher),
+    current_user: User = Depends(require_teacher),
 ):
+    get_owned_course(db, payload.course_id, current_user)
     class_ = Class(**payload.model_dump())
     db.add(class_)
     db.commit()
@@ -69,12 +86,14 @@ def update_class(
     class_id: int,
     payload: ClassUpdate,
     db: Session = Depends(get_db),
-    _teacher=Depends(require_teacher),
+    current_user: User = Depends(require_teacher),
 ):
-    class_ = db.query(Class).filter(Class.id == class_id).first()
-    if class_ is None:
-        raise HTTPException(status_code=404, detail="ไม่พบคลาสเรียนนี้")
-    for key, value in payload.model_dump(exclude_unset=True).items():
+    class_ = get_owned_class(db, class_id, current_user)
+    data = payload.model_dump(exclude_unset=True)
+    # ย้ายคลาสไปรายวิชาอื่นได้เฉพาะรายวิชาที่ตัวเองเป็นเจ้าของ
+    if data.get("course_id") not in (None, class_.course_id):
+        get_owned_course(db, data["course_id"], current_user)
+    for key, value in data.items():
         setattr(class_, key, value)
     db.commit()
     db.refresh(class_)
@@ -85,11 +104,9 @@ def update_class(
 def delete_class(
     class_id: int,
     db: Session = Depends(get_db),
-    _teacher=Depends(require_teacher),
+    current_user: User = Depends(require_teacher),
 ):
-    class_ = db.query(Class).filter(Class.id == class_id).first()
-    if class_ is None:
-        raise HTTPException(status_code=404, detail="ไม่พบคลาสเรียนนี้")
+    class_ = get_owned_class(db, class_id, current_user)
     db.delete(class_)
     db.commit()
 
@@ -124,14 +141,12 @@ def enroll_student(
     class_id: int,
     payload: EnrollmentCreate,
     db: Session = Depends(get_db),
-    _teacher=Depends(require_teacher),
+    current_user: User = Depends(require_teacher),
 ):
     if payload.class_id != class_id:
         raise HTTPException(status_code=400, detail="class_id ไม่ตรงกับ path")
 
-    class_ = db.query(Class).filter(Class.id == class_id).first()
-    if class_ is None:
-        raise HTTPException(status_code=404, detail="ไม่พบคลาสเรียนนี้")
+    get_owned_class(db, class_id, current_user)
 
     student = db.query(Student).filter(Student.id == payload.student_id).first()
     if student is None:
@@ -166,8 +181,9 @@ def unenroll_student(
     class_id: int,
     enrollment_id: int,
     db: Session = Depends(get_db),
-    _teacher=Depends(require_teacher),
+    current_user: User = Depends(require_teacher),
 ):
+    get_owned_class(db, class_id, current_user)
     enrollment = (
         db.query(Enrollment)
         .filter(Enrollment.id == enrollment_id, Enrollment.class_id == class_id)

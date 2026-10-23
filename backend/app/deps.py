@@ -52,3 +52,13 @@ def require_role(*roles: UserRole):
 
 require_student = require_role(UserRole.student)
 require_teacher = require_role(UserRole.teacher)
+
+
+def ensure_course_owner(current_user: User, course) -> None:
+    """อนุญาตเฉพาะอาจารย์เจ้าของรายวิชาเท่านั้น"""
+    teacher = current_user.teacher_profile
+    if teacher is None or course.teacher_id != teacher.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="คุณไม่ใช่อาจารย์เจ้าของรายวิชานี้",
+        )
