@@ -238,6 +238,10 @@ export const translations = {
       ruleCardTitle: "เกณฑ์การให้คะแนนเข้าเรียน",
       onlyCoursePrefix: "เฉพาะวิชา",
       recalcAll: "คำนวณคะแนนใหม่ทั้งหมด",
+      confirmRule: "ยืนยันเกณฑ์",
+      discardRuleEdits: "ยกเลิกการแก้ไข",
+      ruleUnsaved: "มีการแก้ไขเกณฑ์ที่ยังไม่ได้ยืนยัน",
+      ruleSavedPrefix: "ยืนยันเกณฑ์แล้วเมื่อ",
       modeDirect: "คำนวณจากคะแนนเต็มรวม",
       modePerSession: "คำนวณจากคะแนนต่อครั้ง",
       fields: {
@@ -701,6 +705,10 @@ export const translations = {
       ruleCardTitle: "Attendance Scoring Rule",
       onlyCoursePrefix: "For course",
       recalcAll: "Recalculate All Scores",
+      confirmRule: "Confirm Rules",
+      discardRuleEdits: "Discard Changes",
+      ruleUnsaved: "You have rule changes that are not confirmed yet",
+      ruleSavedPrefix: "Rules confirmed at",
       modeDirect: "Calculate from total score",
       modePerSession: "Calculate per session",
       fields: {

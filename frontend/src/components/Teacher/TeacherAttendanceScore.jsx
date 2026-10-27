@@ -60,6 +60,8 @@ export default function TeacherAttendanceScore() {
   const [scoreEdits, setScoreEdits] = useState({}); // classId -> { studentId: { score, note } }
   const [savedAt, setSavedAt] = useState(null);
   const [saving, setSaving] = useState(false);
+  const [savingRule, setSavingRule] = useState(false);
+  const [ruleSavedAt, setRuleSavedAt] = useState(null);
   const [saveError, setSaveError] = useState("");
   const [search, setSearch] = useState("");
 
@@ -76,7 +78,10 @@ export default function TeacherAttendanceScore() {
       ? ruleFromServer(serverRule)
       : defaultRule(Math.max(sessionCount, DEFAULT_SESSION_COUNT)));
 
-  const setRule = (patch) => setRuleEdits((prev) => ({ ...prev, [classId]: { ...rule, ...patch } }));
+  const setRule = (patch) => {
+    setRuleEdits((prev) => ({ ...prev, [classId]: { ...rule, ...patch } }));
+    setRuleSavedAt(null);
+  };
 
   // สถิติของนักศึกษาแต่ละคนในคลาส (รวมคนที่ยังไม่มีคาบเรียนเลย)
   const baseStudents = useMemo(() => {
@@ -161,23 +166,48 @@ export default function TeacherAttendanceScore() {
 
   const handleNoteChange = (id, value) => editStudent(id, { note: value });
 
+  const saveRule = () =>
+    api(`/scores/rules/${classId}`, {
+      method: "PUT",
+      body: {
+        class_id: classId,
+        mode: rule.mode === "perSession" ? "per_session" : "direct",
+        full_score: rule.full,
+        session_count: rule.sessionCount,
+        session_full_score: rule.sessionFull,
+        pass_threshold: rule.passThreshold,
+        late_tiers: rule.lateTiers.map((tier) => ({ min_minutes: tier.minMinutes, deduction: tier.deduction })),
+      },
+    });
+
+  // คลาสที่ยังไม่เคยบันทึกเกณฑ์ (ใช้ค่าเริ่มต้นอยู่) ก็นับว่ายังไม่ได้ยืนยัน
+  const ruleDirty = Boolean(ruleEdits[classId]) || (!ruleReq.loading && !ruleReq.error && !serverRule);
+
+  // ยืนยันเฉพาะเกณฑ์ (ไม่บันทึกคะแนนรายคน)
+  const handleConfirmRule = async () => {
+    if (!classId) return;
+    setSavingRule(true);
+    setSaveError("");
+    try {
+      await saveRule();
+      setRuleEdits((prev) => ({ ...prev, [classId]: undefined }));
+      ruleReq.reload();
+      setRuleSavedAt(new Date().toLocaleTimeString("th-TH", { hour: "2-digit", minute: "2-digit" }));
+    } catch (err) {
+      setSaveError(err.message);
+    } finally {
+      setSavingRule(false);
+    }
+  };
+
+  const discardRuleEdits = () => setRuleEdits((prev) => ({ ...prev, [classId]: undefined }));
+
   const handleSaveAll = async () => {
     if (!classId) return;
     setSaving(true);
     setSaveError("");
     try {
-      await api(`/scores/rules/${classId}`, {
-        method: "PUT",
-        body: {
-          class_id: classId,
-          mode: rule.mode === "perSession" ? "per_session" : "direct",
-          full_score: rule.full,
-          session_count: rule.sessionCount,
-          session_full_score: rule.sessionFull,
-          pass_threshold: rule.passThreshold,
-          late_tiers: rule.lateTiers.map((tier) => ({ min_minutes: tier.minMinutes, deduction: tier.deduction })),
-        },
-      });
+      await saveRule();
       // คะแนนที่ไม่ตรงกับสูตร = อาจารย์แก้เอง (manual) ระบบจะไม่คำนวณทับ
       await Promise.all(
         allStudents.map((s) =>
@@ -443,6 +473,40 @@ export default function TeacherAttendanceScore() {
           <span>
             {rule.mode === "perSession" ? t("scores.formulaPerSession") : t("scores.formulaDirect")} — {t("scores.formulaFooter")}
           </span>
+        </div>
+
+        <div className="flex flex-col sm:flex-row items-center justify-end gap-3 mt-5">
+          {ruleDirty ? (
+            <span className="text-xs text-amber-600 dark:text-amber-400 font-medium flex items-center gap-1.5 sm:mr-auto">
+              <AlertTriangle className="w-3.5 h-3.5" />
+              {t("scores.ruleUnsaved")}
+            </span>
+          ) : (
+            ruleSavedAt && (
+              <span className="text-xs text-emerald-600 dark:text-emerald-400 font-medium flex items-center gap-1.5 sm:mr-auto">
+                <CheckCircle2 className="w-3.5 h-3.5" />
+                {t("scores.ruleSavedPrefix")} {ruleSavedAt}
+              </span>
+            )
+          )}
+          {ruleEdits[classId] && (
+            <button
+              onClick={discardRuleEdits}
+              disabled={savingRule}
+              className="flex items-center gap-2 border border-slate-200 dark:border-slate-700 rounded-xl px-4 py-2.5 text-sm text-slate-500 dark:text-slate-400 font-medium hover:bg-slate-50 dark:hover:bg-slate-800 disabled:opacity-60 transition-colors"
+            >
+              <RotateCcw className="w-4 h-4" />
+              {t("scores.discardRuleEdits")}
+            </button>
+          )}
+          <button
+            onClick={handleConfirmRule}
+            disabled={savingRule || !classId || !ruleDirty}
+            className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-60 disabled:hover:bg-blue-600 transition-colors text-white text-sm font-semibold px-5 py-2.5 rounded-xl shadow-sm shadow-blue-200 dark:shadow-blue-950"
+          >
+            <CheckCircle2 className="w-4 h-4" />
+            {t("scores.confirmRule")}
+          </button>
         </div>
       </div>
 
