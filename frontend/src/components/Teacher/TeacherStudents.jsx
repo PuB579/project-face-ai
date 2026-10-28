@@ -69,7 +69,10 @@ export default function TeacherStudents() {
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState("");
   const [major, setMajor] = useState("");
+  const [classId, setClassId] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
+  const classesReq = useApi("/classes/mine", []);
+  const enrolledReq = useApi(classId ? `/classes/${classId}/students` : null, []);
   const [faceStudent, setFaceStudent] = useState(null);
   const [editing, setEditing] = useState(null); // null | "new" | student
   const [actionError, setActionError] = useState("");
@@ -82,11 +85,20 @@ export default function TeacherStudents() {
   const all = (studentsReq.data || []).map((s) => ({ ...s, status: studentStatus(s) }));
   const approvalByProfile = new Map((pendingReq.data || []).map((a) => [a.face_profile_id, a]));
   const majors = [...new Set(all.map((s) => s.major).filter(Boolean))];
+  const classes = classesReq.data || [];
+  // คลาสที่รหัสวิชาซ้ำกัน (หลายกลุ่มเรียน) ให้ต่อท้ายด้วยรหัสกลุ่ม
+  const courseCodeCount = classes.reduce((m, c) => m.set(c.course_code, (m.get(c.course_code) || 0) + 1), new Map());
+  const classOptions = classes.map((c) => ({
+    value: String(c.id),
+    label: `${c.course_code} ${c.course_name}${courseCodeCount.get(c.course_code) > 1 && c.class_code ? ` (${c.class_code})` : ""}`,
+  }));
+  const enrolledIds = new Set((enrolledReq.data || []).map((e) => e.student_id));
 
   const q = search.trim().toLowerCase();
   const filtered = all.filter(
     (s) =>
       (!major || s.major === major) &&
+      (!classId || enrolledIds.has(s.id)) &&
       (!statusFilter || s.status === statusFilter) &&
       (!q || `${s.student_code} ${s.full_name} ${s.email}`.toLowerCase().includes(q))
   );
@@ -105,6 +117,7 @@ export default function TeacherStudents() {
   const resetFilters = () => {
     setSearch("");
     setMajor("");
+    setClassId("");
     setStatusFilter("");
     setPage(1);
   };
@@ -156,8 +169,8 @@ export default function TeacherStudents() {
   return (
     <TeacherLayout titleIcon={Users} titleKey="nav.students" subtitleKey="students.subtitle">
       <LoadState
-        loading={studentsReq.loading}
-        error={studentsReq.error || pendingReq.error || actionError}
+        loading={studentsReq.loading || enrolledReq.loading}
+        error={studentsReq.error || pendingReq.error || classesReq.error || enrolledReq.error || actionError}
         onRetry={reload}
       />
 
@@ -199,6 +212,13 @@ export default function TeacherStudents() {
           value={major}
           onChange={(v) => { setMajor(v); setPage(1); }}
           options={majors.map((m) => ({ value: m, label: m }))}
+        />
+        <FilterSelect
+          label={t("students.filters.course")}
+          allLabel={t("students.filters.all")}
+          value={classId}
+          onChange={(v) => { setClassId(v); setPage(1); }}
+          options={classOptions}
         />
         <FilterSelect
           label={t("students.filters.status")}
@@ -396,7 +416,7 @@ function FilterSelect({ label, allLabel, value, onChange, options }) {
   return (
     <label className="relative flex items-center gap-2 border border-slate-200 dark:border-slate-700 rounded-xl pl-4 pr-9 py-2.5 text-sm text-slate-600 dark:text-slate-300 font-medium shrink-0 cursor-pointer hover:border-slate-300 dark:hover:border-slate-600 focus-within:ring-2 focus-within:ring-blue-200 dark:focus-within:ring-blue-900 transition-colors">
       <span className="text-slate-400 dark:text-slate-500">{label}:</span>
-      <span className="text-slate-800 dark:text-slate-100 font-semibold">{selected ? selected.label : allLabel}</span>
+      <span className="text-slate-800 dark:text-slate-100 font-semibold truncate max-w-[240px]">{selected ? selected.label : allLabel}</span>
       <ChevronDown className="w-4 h-4 text-slate-400 dark:text-slate-500 absolute right-3 pointer-events-none" />
       <select
         value={value}

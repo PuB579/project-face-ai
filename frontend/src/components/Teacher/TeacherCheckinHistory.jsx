@@ -2,6 +2,8 @@ import { useMemo, useState } from "react";
 import {
   History,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   CalendarClock,
   Search,
   RotateCcw,
@@ -30,6 +32,17 @@ import { useTeacherData } from "./useTeacherData";
 import { addDays, countStatus, dailyTrend, groupBy, hhmm, initial, isoDate, pct, thaiDate } from "../../lib/format";
 
 const FINAL = new Set(["present", "late", "absent"]);
+const PAGE_SIZE = 20;
+
+// เลขหน้าที่จะแสดง: หน้าแรก หน้าสุดท้าย และหน้ารอบ ๆ หน้าปัจจุบัน ที่เหลือย่อเป็น "…"
+function pageNumbers(current, count) {
+  const pages = [];
+  for (let n = 1; n <= count; n++) {
+    if (n === 1 || n === count || Math.abs(n - current) <= 1) pages.push(n);
+    else if (pages[pages.length - 1] !== "…") pages.push("…");
+  }
+  return pages;
+}
 const statusTabs = [
   { key: "all", labelKey: "history.statusTabs.all", icon: Circle, activeCls: "bg-blue-600 text-white border-blue-600" },
   { key: "present", labelKey: "history.statusTabs.present", icon: CheckCircle2, activeCls: "bg-emerald-50 dark:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400 border-emerald-200 dark:border-emerald-900" },
@@ -50,6 +63,7 @@ export default function TeacherCheckinHistory() {
   const [dateTo, setDateTo] = useState(() => isoDate());
   const [search, setSearch] = useState("");
   const [classId, setClassId] = useState("");
+  const [page, setPage] = useState(1);
   const { classes, records, loading, error, reload } = useTeacherData({ start: dateFrom, end: dateTo });
 
   // เฉพาะแถวที่ได้ผลแล้ว (ไม่รวมคาบที่ยังเปิดให้เช็คชื่ออยู่)
@@ -73,6 +87,9 @@ export default function TeacherCheckinHistory() {
   ];
 
   const filteredLogs = activeStatus === "all" ? scoped : scoped.filter((l) => l.status === activeStatus);
+  const pageCount = Math.max(1, Math.ceil(filteredLogs.length / PAGE_SIZE));
+  const currentPage = Math.min(page, pageCount);
+  const pageLogs = filteredLogs.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
   const trend = dailyTrend(scoped);
   const topAbsentees = [...groupBy(scoped.filter((r) => r.status === "absent"), (r) => r.student_id).values()]
     .map((rows) => ({ id: rows[0].student_code, name: rows[0].student_name, count: rows.length }))
@@ -87,6 +104,7 @@ export default function TeacherCheckinHistory() {
     setActiveStatus("all");
     setDateFrom(isoDate(addDays(new Date(), -29)));
     setDateTo(isoDate());
+    setPage(1);
   };
   const dateInputCls =
     "border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 rounded-xl px-3 py-2 text-sm text-slate-600 dark:text-slate-300";
@@ -97,9 +115,9 @@ export default function TeacherCheckinHistory() {
       subtitleKey="history.subtitle"
       headerExtra={
         <div className="hidden sm:flex items-center gap-2 shrink-0">
-          <input type="date" value={dateFrom} max={dateTo} onChange={(e) => e.target.value && setDateFrom(e.target.value)} className={dateInputCls} />
+          <input type="date" value={dateFrom} max={dateTo} onChange={(e) => { if (e.target.value) { setDateFrom(e.target.value); setPage(1); } }} className={dateInputCls} />
           <span className="text-slate-400">-</span>
-          <input type="date" value={dateTo} min={dateFrom} onChange={(e) => e.target.value && setDateTo(e.target.value)} className={dateInputCls} />
+          <input type="date" value={dateTo} min={dateFrom} onChange={(e) => { if (e.target.value) { setDateTo(e.target.value); setPage(1); } }} className={dateInputCls} />
         </div>
       }
     >
@@ -128,13 +146,13 @@ export default function TeacherCheckinHistory() {
           <input
             type="text"
             value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            onChange={(e) => { setSearch(e.target.value); setPage(1); }}
             placeholder={t("live.searchStudent")}
             className="w-full pl-10 pr-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-sm text-slate-700 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-200 dark:focus:ring-blue-900"
           />
         </div>
 
-        <FilterSelect label={t("history.filters.course")} value={classId} onChange={setClassId}>
+        <FilterSelect label={t("history.filters.course")} value={classId} onChange={(v) => { setClassId(v); setPage(1); }}>
           {classes.map((c) => (
             <option key={c.id} value={c.id}>
               {c.course_code} {c.course_name}
@@ -155,7 +173,7 @@ export default function TeacherCheckinHistory() {
           return (
             <button
               key={tab.key}
-              onClick={() => setActiveStatus(tab.key)}
+              onClick={() => { setActiveStatus(tab.key); setPage(1); }}
               className={`flex items-center gap-2 text-sm font-medium px-4 py-2 rounded-xl border transition-colors ${
                 isActive ? tab.activeCls : "bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800"
               }`}
@@ -183,7 +201,7 @@ export default function TeacherCheckinHistory() {
             </tr>
           </thead>
           <tbody>
-            {filteredLogs.map((r) => {
+            {pageLogs.map((r) => {
               const sm = statusMeta[r.status];
               const StatusIcon = sm.icon;
               return (
@@ -225,6 +243,48 @@ export default function TeacherCheckinHistory() {
             )}
           </tbody>
         </table>
+
+        {/* Pagination */}
+        <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-5 mt-2 border-t border-slate-100 dark:border-slate-800">
+          <div className="text-xs text-slate-400 dark:text-slate-500">
+            {t("students.showingPrefix")} {filteredLogs.length ? (currentPage - 1) * PAGE_SIZE + 1 : 0} -{" "}
+            {(currentPage - 1) * PAGE_SIZE + pageLogs.length} {t("students.showingFrom")} {filteredLogs.length.toLocaleString()}{" "}
+            {t("students.showingSuffix")}
+          </div>
+          <div className="flex items-center gap-1.5">
+            <button
+              onClick={() => setPage(Math.max(1, currentPage - 1))}
+              disabled={currentPage === 1}
+              className="w-8 h-8 flex items-center justify-center rounded-lg border border-slate-200 dark:border-slate-700 text-slate-400 dark:text-slate-500 hover:bg-slate-50 dark:hover:bg-slate-800 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            >
+              <ChevronLeft className="w-4 h-4" />
+            </button>
+            {pageNumbers(currentPage, pageCount).map((n, i) =>
+              n === "…" ? (
+                <span key={`gap-${i}`} className="w-8 h-8 flex items-center justify-center text-sm text-slate-400 dark:text-slate-500">
+                  …
+                </span>
+              ) : (
+                <button
+                  key={n}
+                  onClick={() => setPage(n)}
+                  className={`w-8 h-8 flex items-center justify-center rounded-lg text-sm font-medium transition-colors ${
+                    currentPage === n ? "bg-blue-600 text-white" : "border border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800"
+                  }`}
+                >
+                  {n}
+                </button>
+              )
+            )}
+            <button
+              onClick={() => setPage(Math.min(pageCount, currentPage + 1))}
+              disabled={currentPage === pageCount}
+              className="w-8 h-8 flex items-center justify-center rounded-lg border border-slate-200 dark:border-slate-700 text-slate-400 dark:text-slate-500 hover:bg-slate-50 dark:hover:bg-slate-800 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            >
+              <ChevronRight className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
       </div>
 
       {/* Daily trend chart + top absentees */}

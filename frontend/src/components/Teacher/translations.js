@@ -313,7 +313,7 @@ export const translations = {
         suspended: "นักศึกษาที่ถูกระงับ",
       },
       searchPlaceholder: "ค้นหาชื่อ-นามสกุล, รหัสนักศึกษา หรืออีเมล...",
-      filters: { faculty: "คณะ/สาขา", year: "ชั้นปี", status: "สถานะ", reset: "รีเซ็ต", all: "ทั้งหมด" },
+      filters: { faculty: "คณะ/สาขา", course: "รายวิชา", year: "ชั้นปี", status: "สถานะ", reset: "รีเซ็ต", all: "ทั้งหมด" },
       listTitlePrefix: "รายชื่อนักศึกษา",
       exportData: "ส่งออกข้อมูล",
       table: {
@@ -780,7 +780,7 @@ export const translations = {
         suspended: "Suspended Students",
       },
       searchPlaceholder: "Search by name, student ID, or email...",
-      filters: { faculty: "Faculty/Major", year: "Year", status: "Status", reset: "Reset", all: "All" },
+      filters: { faculty: "Faculty/Major", course: "Course", year: "Year", status: "Status", reset: "Reset", all: "All" },
       listTitlePrefix: "Student List",
       exportData: "Export Data",
       table: {
