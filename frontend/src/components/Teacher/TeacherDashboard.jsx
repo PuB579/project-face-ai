@@ -34,7 +34,7 @@ export default function TeacherDashboard() {
   const { t } = useAppearanceSettings();
   const today = isoDate();
   const { classes, records, loading, error, reload } = useTeacherData({
-    start: isoDate(addDays(new Date(), -6)),
+    start: isoDate(addDays(new Date(), -30)),
     end: today,
   });
 
@@ -182,7 +182,7 @@ export default function TeacherDashboard() {
             <div className="flex items-center gap-2">
               {courseSelect(trendClass, setTrendClass)}
               <span className="text-xs font-medium text-slate-500 dark:text-slate-400 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-1.5">
-                {t("dashboard.last7Days")}
+                {t("dashboard.last31Days")}
               </span>
             </div>
           </div>
