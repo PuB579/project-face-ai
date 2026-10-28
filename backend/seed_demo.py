@@ -8,14 +8,22 @@ Demo data — เติมข้อมูลตัวอย่างให้ห
   แล้วให้ระบบสร้างคาบตามตารางเรียนย้อนหลัง
 - สุ่มผลเช็คชื่อของคาบที่ผ่านไปแล้ว (เข้าเรียน / มาสาย / ขาด) โดยแต่ละคนมีนิสัยต่างกัน
 - เพิ่มประกาศตัวอย่าง
+- ใส่สถานะใบหน้า/บัญชีให้นักศึกษาตัวอย่าง (ปกติ / รออนุมัติ / ใบหน้าถูกปฏิเสธ / ยังไม่ลงทะเบียน / ถูกระงับ)
+  เฉพาะคนที่ยังไม่มีใบหน้าในระบบ รูปเป็นภาพวาดแทนใบหน้า ไม่มี embedding จึงเช็คชื่อด้วยใบหน้าจริงไม่ได้
 """
 import datetime as dt
+import os
 import random
+import uuid
+
+from PIL import Image, ImageDraw
 
 from app.attendance_utils import sync_scheduled_sessions
+from app.config import settings
 from app.database import SessionLocal
 from app.models import (
     Announcement,
+    ApprovalStatus,
     AttendanceDetail,
     AttendanceMethod,
     AttendanceSession,
@@ -23,6 +31,8 @@ from app.models import (
     Class,
     Course,
     Enrollment,
+    FaceApproval,
+    FaceProfile,
     Student,
     Teacher,
 )
@@ -30,9 +40,42 @@ from app.models import (
 TEACHER_CODE = "T0001"
 rng = random.Random(42)
 
+# สถานะตัวอย่างของนักศึกษาจาก seed.py (approved / pending / rejected / none / suspended)
+DEMO_FACE_STATUS = {
+    "6604101301": "approved", "6604101302": "approved", "6604101303": "pending",
+    "6604101304": "approved", "6604101305": "rejected", "6604101306": "approved",
+    "6604101307": "none", "6604101308": "pending", "6604101309": "approved",
+    "6604101310": "suspended", "6704101311": "approved", "6704101312": "pending",
+    "6704101313": "rejected", "6704101314": "approved", "6704101315": "none",
+    "6704101316": "approved", "6704101317": "pending", "6704101318": "rejected",
+    "6704101319": "suspended", "6704101320": "none",
+}
+REJECT_REMARKS = ["รูปไม่ชัด กรุณาถ่ายใหม่ในที่แสงสว่าง", "ใบหน้าถูกบังบางส่วน", "ไม่ใช่รูปหน้าตรง"]
+
 
 def add_minutes(t: dt.time, minutes: int) -> dt.time:
     return (dt.datetime.combine(dt.date.min, t) + dt.timedelta(minutes=minutes)).time()
+
+
+def save_placeholder_face() -> str:
+    """วาดรูปคนแบบง่าย ๆ แทนรูปใบหน้าจริง แล้วบันทึกในโฟลเดอร์ uploads/faces"""
+    bg = tuple(rng.randint(190, 235) for _ in range(3))
+    skin = rng.choice([(241, 204, 170), (224, 172, 125), (198, 140, 95)])
+    hair = rng.choice([(40, 30, 25), (70, 50, 35), (25, 25, 30)])
+    img = Image.new("RGB", (320, 400), bg)
+    d = ImageDraw.Draw(img)
+    d.ellipse((40, 300, 280, 520), fill=rng.choice([(60, 90, 160), (90, 90, 90), (150, 60, 60)]))
+    d.ellipse((95, 70, 225, 230), fill=hair)
+    d.ellipse((100, 95, 220, 250), fill=skin)
+    d.ellipse((130, 155, 145, 170), fill=(40, 40, 40))
+    d.ellipse((175, 155, 190, 170), fill=(40, 40, 40))
+    d.arc((135, 185, 185, 220), 20, 160, fill=(150, 70, 70), width=3)
+
+    face_dir = os.path.join(settings.uploads_dir, settings.face_uploads_subdir)
+    os.makedirs(face_dir, exist_ok=True)
+    path = os.path.join(face_dir, f"demo-{uuid.uuid4().hex}.png")
+    img.save(path)
+    return path
 
 
 def run():
@@ -126,6 +169,30 @@ def run():
                 ),
             ])
             print("✔ เพิ่มประกาศ 3 รายการ")
+
+        # 5) สถานะใบหน้า/บัญชีของนักศึกษาตัวอย่าง (ข้ามคนที่มีใบหน้าในระบบแล้ว)
+        tagged = 0
+        for student in students:
+            kind = DEMO_FACE_STATUS.get(student.student_code)
+            if kind is None or student.face_profiles:
+                continue
+            if kind == "suspended":
+                student.user.is_active = False
+                kind = "approved"
+            if kind != "none":
+                profile = FaceProfile(student_id=student.id, image_path=save_placeholder_face(), is_active=True)
+                db.add(profile)
+                db.flush()
+                db.add(
+                    FaceApproval(
+                        face_profile_id=profile.id,
+                        teacher_id=teacher.id,
+                        status=ApprovalStatus(kind),
+                        remark=rng.choice(REJECT_REMARKS) if kind == "rejected" else None,
+                    )
+                )
+            tagged += 1
+        print(f"✔ ใส่สถานะใบหน้าให้นักศึกษาตัวอย่าง {tagged} คน")
         db.commit()
     finally:
         db.close()
